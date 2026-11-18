@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>daybook</string>
+	<key>CFBundleIconFile</key>
+	<string>Daybook</string>
+	<key>CFBundleIdentifier</key>
+	<string>local.daybook.recorder</string>
+	<key>CFBundleName</key>
+	<string>Daybook</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2.0</string>
+	<key>CFBundleVersion</key>
+	<string>2</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Daybook records your microphone locally as the separate me track while workday recording is enabled.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Daybook captures selected app/system audio and periodic screen observations for your local workday memory.</string>
+</dict>
+</plist>

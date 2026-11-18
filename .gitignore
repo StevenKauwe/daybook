@@ -1,0 +1,28 @@
+# Private, per-Mac recorder state and local validation artifacts
+/data/
+/tests/evidence/
+/docs/VALIDATION.md
+/docs/NEXT_QUALITY_PASS.md
+*.sqlite*
+*.gguf
+*.f32
+*.m4a
+control-url.txt
+signing-identity.txt
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+
+# Fetched sources, build products and developer caches
+/vendor/
+/target/
+/dist/
+/native-rust/target/
+/native/daybook-native
+/ui-rust/target/
+/native/daybook-ui
+*.log
+__pycache__/
+.DS_Store

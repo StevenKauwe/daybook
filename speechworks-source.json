@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/StevenKauwe/speechworks.git",
+  "revision": "8d2690a99ab849d30b9d0fa70f6fda84883b2cef",
+  "tree": "5d508b6d8ced64ea1de76497cbca93fec80cc150",
+  "destination": "vendor/speechworks-8d2690a",
+  "cpu_threads": 2,
+  "recovery_patch_sha256": "1fe6f1cab5167d8f64c1260b3d8d24b95e256facbf06c5d03fed5fb552892ec8"
+}

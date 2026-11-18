@@ -1,0 +1,18 @@
+[package]
+name = "daybook-native"
+version = "0.2.0"
+edition = "2024"
+[dependencies]
+objc2 = "0.6.5"
+block2 = "0.6.2"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSArray", "NSDictionary", "NSData", "NSGeometry", "NSRange"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+chrono = "0.4"
+libc = "0.2"
+speechworks = { path = "../vendor/speechworks-8d2690a/crates/speechworks" }
+[profile.release]
+opt-level = 2
+[profile.dev]
+debug = 0

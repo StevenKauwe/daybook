@@ -1,0 +1,126 @@
+--- a/crates/inference/src/lib.rs
++++ b/crates/inference/src/lib.rs
+@@ -79,10 +79,28 @@
+ 
+ pub struct Model {
+     id: u64,
+-    source: gguf::Gguf,
++    source: RecoverySource,
++    streaming: bool,
+     model: Mutex<Family>,
+     options: LoadOptions,
+     fallback: Mutex<Option<String>>,
++}
++
++enum RecoverySource {
++    Memory(gguf::Gguf),
++    Reload(Box<dyn Fn() -> Result<Vec<u8>> + Send + Sync>),
++}
++
++impl RecoverySource {
++    async fn load_cpu(&self, max_samples: usize) -> Result<Family> {
++        match self {
++            Self::Memory(source) => Family::load(source, Target::Cpu, max_samples).await,
++            Self::Reload(reload) => {
++                let source = gguf::Gguf::from_bytes(reload()?)?;
++                Family::load(&source, Target::Cpu, max_samples).await
++            }
++        }
++    }
+ }
+ 
+ /// State of one phrase. Feed fresh 16-kHz PCM with `Model::transcribe_chunk`;
+@@ -159,9 +177,7 @@
+ }
+ impl Model {
+     pub fn is_streaming(&self) -> bool {
+-        self.source
+-            .get::<&str>("general.architecture")
+-            .is_ok_and(|name| name == "moonshine_streaming")
++        self.streaming
+     }
+     pub async fn from_bytes(bytes: Vec<u8>, backend: Backend) -> Result<Self> {
+         Self::from_bytes_with(
+@@ -199,11 +215,21 @@
+         };
+         Ok(Self {
+             id: MODEL_ID.fetch_add(1, Ordering::Relaxed),
+-            source,
++            streaming: matches!(&model, Family::Streaming(_)),
++            source: RecoverySource::Memory(source),
+             model: Mutex::new(model),
+             options,
+             fallback: Mutex::new(fallback),
+         })
++    }
++    /// After loading, release the original GGUF bytes. On device loss the caller
++    /// supplies the identical bytes again, or an explicit recovery error.
++    pub fn with_recovery_loader(
++        mut self,
++        reload: impl Fn() -> Result<Vec<u8>> + Send + Sync + 'static,
++    ) -> Self {
++        self.source = RecoverySource::Reload(Box::new(reload));
++        self
+     }
+     pub fn device(&self) -> Result<Device> {
+         Ok(self
+@@ -244,7 +270,7 @@
+             Err(error) if self.options.backend == Backend::Auto && error.is_fatal() => {
+                 let reason = error.to_string();
+                 *model =
+-                    Family::load(&self.source, Target::Cpu, self.options.max_audio_samples).await?;
++                    self.source.load_cpu(self.options.max_audio_samples).await?;
+                 *self
+                     .fallback
+                     .lock()
+@@ -305,7 +331,7 @@
+         };
+         let result = match result {
+             Err(error) if self.options.backend == Backend::Auto && error.is_fatal() => {
+-                match Family::load(&self.source, Target::Cpu, self.options.max_audio_samples).await
++                match self.source.load_cpu(self.options.max_audio_samples).await
+                 {
+                     Ok(cpu) => {
+                         *model = cpu;
+@@ -352,6 +378,41 @@
+         for bytes in [vec![], b"GGUF".to_vec(), vec![0; 1024]] {
+             assert!(pollster::block_on(Model::from_bytes(bytes, Backend::Cpu)).is_err());
+         }
++    }
++    #[test]
++    #[ignore = "requires Metal, DAYBOOK_RECOVERY_MODEL and an existing speech fixture"]
++    fn file_recovery_replays_streaming_audio_after_device_loss() {
++        use std::sync::{Arc, atomic::AtomicUsize};
++        let file = std::path::PathBuf::from(std::env::var("DAYBOOK_RECOVERY_MODEL").unwrap());
++        let fixtures = std::path::PathBuf::from(std::env::var("SPEECHWORKS_TEST_MODELS").unwrap());
++        let mut wav = hound::WavReader::open(fixtures.join("jfk.wav")).unwrap();
++        let pcm: Vec<f32> = wav.samples::<i16>().take(64_000)
++            .map(|s| s.unwrap() as f32 / 32768.).collect();
++        assert_eq!(pcm.len(), 64_000);
++        let calls = Arc::new(AtomicUsize::new(0));
++        let count = Arc::clone(&calls);
++        let source = file.clone();
++        let model = pollster::block_on(Model::from_bytes(std::fs::read(&file).unwrap(), Backend::Auto))
++            .unwrap().with_recovery_loader(move || {
++                count.fetch_add(1, Ordering::SeqCst);
++                std::fs::read(&source).map_err(|e| Error::Model(e.to_string()))
++            });
++        assert!(model.is_streaming());
++        assert_eq!(model.device().unwrap().api, Api::Metal);
++        let mut state = StreamState::new();
++        pollster::block_on(model.transcribe_chunk(&mut state, &pcm[..32_000], false)).unwrap();
++        assert_eq!(calls.load(Ordering::SeqCst), 0);
++        model.model.lock().unwrap().destroy_gpu_for_test();
++        let recovered = pollster::block_on(model.transcribe_chunk(&mut state, &pcm[32_000..], true)).unwrap();
++        assert_eq!(calls.load(Ordering::SeqCst), 1);
++        assert_eq!(state.samples(), pcm.len());
++        assert!(state.is_finished() && model.fallback_reason().is_some());
++        assert_eq!(model.device().unwrap().api, Api::Cpu);
++        assert!(!recovered.text.trim().is_empty());
++        drop(model);
++        let reference = pollster::block_on(Model::from_bytes(std::fs::read(file).unwrap(), Backend::Cpu)).unwrap();
++        let expected = pollster::block_on(reference.transcribe_chunk(&mut StreamState::new(), &pcm, true)).unwrap();
++        assert_eq!(recovered.text, expected.text);
+     }
+     #[test]
+     #[ignore = "requires GPU access and SPEECHWORKS_TEST_MODELS fixtures"]

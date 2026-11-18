@@ -19,8 +19,27 @@ At 1080p, the blank page took 111 ms and the page with 240 words took 268 ms. Th
 
 ## Run it on another Mac
 
+The [changed-region experiment](#could-daybook-read-only-what-changed) also compares full-screen OCR with reading changed lines.
+
 From the Daybook checkout, run `just benchmark-ocr`. The command builds the release helper, generates six temporary PNGs and runs the on-device Apple Vision recognizer Daybook uses for saved images. The benchmark uses generated pages for every input.
 
 The resolution cases draw the same twelve lines at the same proportions on each canvas. The density cases vary the line count at 1080p. Each round shuffles the cases. Python measures elapsed wall time around a fresh helper process and reads its peak resident memory from macOS `/usr/bin/time -l`. This measures the helper process only. The other Daybook processes and system-wide accelerator allocations are outside that figure.
 
 For the last two columns, a separate helper decodes the same PNG and calls Vision four times. The first column of OCR timings uses the first call in each process. The repeat column uses the nine subsequent calls across the three processes. The script also reports the change in that process’s memory high-water mark after loading the image. [Benchmark script](../scripts/benchmark_ocr.py)
+
+## Could Daybook read only what changed?
+
+Yes. Daybook’s periodic capture currently takes a 1280-pixel-wide screenshot and compares a tiny whole-screen thumbnail. A small edit can disappear in that average. An opt-in screen stream could use ScreenCaptureKit’s per-frame changed rectangles and idle status. Apple Vision can recognize text in a specified region. These APIs are available on Daybook’s supported Macs. [ScreenCaptureKit frame changes](https://developer.apple.com/documentation/screencapturekit/scstreamframeinfo/dirtyrects) · [Idle frames](https://developer.apple.com/documentation/screencapturekit/scframestatus/idle) · [Vision regions of interest](https://developer.apple.com/documentation/vision/vnimagebasedrequest/regionofinterest)
+
+On the M2 Max, an eight-frame, 1920 × 1080 synthetic sequence contained a page, an appended line, a date changed from November 18 to 19, and a scroll that brought another line into view. Each state appeared twice. Both approaches recovered the same 13 distinct lines in order, including both dates.
+
+| Approach | OCR calls | Median time in the OCR helper across eight frames |
+| --- | ---: | ---: |
+| Read every full frame | 8 full frames | 1.64 s |
+| Read changed content | 2 full frames and 2 horizontal strips | 0.70 s |
+
+The experiment compared adjacent PNGs, skipped exact repeats, and widened small pixel changes to a full line with 24 pixels of vertical padding. A change taller than 35% of the screen triggered a full read. The first frame and the scroll took that path. Timings are medians of three passes with alternating run order. They include launching the normal OCR helper, decoding and recognition. Frame acquisition, difference calculation, cropping and battery use were outside the measurement.
+
+A practical first version would keep one OCR job in flight, combine all changed regions while it runs, and read after typing or scrolling settles. A long scroll, lost frames, a new capture target or a scale change would trigger a fresh baseline. ScreenCaptureKit reports changes relative to the preceding frame, so dropping a frame also means keeping its dirty regions or doing a full read. [Apple’s explanation of frame metadata](https://developer.apple.com/videos/play/wwdc2022/10155/?time=814)
+
+For the timeline, match lines within a recent window of the same capture target. Use text, nearby lines and positions to recognize a paragraph that moved during scrolling. Collapse whitespace and keep numbers, punctuation and case so an edit like **$120 → $125** survives. Keep first and last seen times for repeated content. A revisit after switching windows and an explicitly saved screenshot each deserve their own moment. The next feasibility check is a real work session with a terminal, a scrolling document and moving video, measuring missed edits, duplicate entries and energy use. Streaming OCR is a proposal.

@@ -1,5 +1,23 @@
 use serde::{Deserialize, Serialize};
 
+pub fn entry_label(kind: &str, source: &str) -> &'static str {
+    match (kind, source) {
+        ("note", "clipboard") => "Clipboard note",
+        ("note", _) => "Your note",
+        ("screen", "clipboard") => "Copied image",
+        ("screen", "screenshot") => "Saved screenshot",
+        ("screen", "vision") => "Screen description",
+        ("screen", _) => "On screen",
+        ("transcript_suppressed", _) => "Suppressed audio",
+        ("preview_abandoned", _) => "Unfinished passage",
+        ("preview", "me") => "You · transcribing",
+        ("preview", _) => "System audio · transcribing",
+        ("transcript", "me") => "You said",
+        ("transcript", _) => "System audio",
+        _ => "Activity",
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ReadingStyle {

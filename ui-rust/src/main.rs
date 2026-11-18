@@ -16,10 +16,12 @@ use std::{
     sync::mpsc::{self, Receiver, SyncSender},
     time::{Duration, Instant},
 };
+mod archive;
 mod design;
 mod live;
 mod meters;
 mod perf;
+mod picture;
 mod preview;
 #[path = "../../src/reading.rs"]
 mod reading;
@@ -69,14 +71,19 @@ fn call_with(
             );
         }
     };
+    let limit = if path == "/copy_time_range" {
+        13 * 1024 * 1024
+    } else {
+        4 * 1024 * 1024
+    };
     let mut b = Vec::new();
     response
         .into_reader()
-        .take(4 * 1024 * 1024 + 1)
+        .take(limit + 1)
         .read_to_end(&mut b)
         .map_err(|e| e.to_string())?;
-    if b.len() > 4 * 1024 * 1024 {
-        return Err("Local response exceeded the 4 MiB inspection limit".into());
+    if b.len() as u64 > limit {
+        return Err("Local response exceeded the inspection limit".into());
     }
     serde_json::from_slice(&b).map_err(|e| e.to_string())
 }
@@ -180,6 +187,8 @@ struct Controls {
     pages: usize,
     last_timeline: Instant,
     loading_timeline: bool,
+    archive: archive::Archive,
+    picture: picture::Viewer,
     detail: Value,
     detail_request: Value,
     history: Vec<(Value, Value)>,
@@ -349,6 +358,8 @@ impl Controls {
             pages: 1,
             last_timeline: Instant::now(),
             loading_timeline: false,
+            archive: Default::default(),
+            picture: Default::default(),
             detail: Value::Null,
             detail_request: Value::Null,
             history: vec![],
@@ -413,13 +424,26 @@ impl Controls {
         }
     }
     fn filter(&self) -> Value {
-        json!({"day":self.day,"kind":self.kind,"source":self.source,"query":self.query})
+        let mut v =
+            json!({"day":self.day,"kind":self.kind,"source":self.source,"query":self.query});
+        if self.tab == 1 {
+            if let Some((from, until)) = self.archive.selection {
+                v["from"] = json!(from);
+                v["until"] = json!(until);
+            }
+        }
+        v
     }
     fn refresh(&mut self, more: bool) {
+        self.request_timeline(more, false);
+    }
+    fn request_timeline(&mut self, more: bool, background: bool) {
         if self.loading_timeline {
             return;
         }
         let mut v = self.filter();
+        v["activity"] = json!(self.tab == 1 && !more);
+        v["background"] = json!(background);
         if more {
             v["before_at"] = self.next["before_at"].clone();
             v["before_id"] = self.next["before_id"].clone();
@@ -438,8 +462,17 @@ impl Controls {
             }
         }
         let v = json!({"kind":kind,"id":id,"part":part});
-        self.detail_request = v.clone();
-        self.send("/inspect", Some(v));
+        if self.send("/inspect", Some(v.clone())) {
+            self.detail_request = v;
+            self.detail = Value::Null;
+            self.picture.clear();
+        }
+    }
+    fn close_entry(&mut self) {
+        self.detail_request = Value::Null;
+        self.detail = Value::Null;
+        self.history.clear();
+        self.picture.clear();
     }
     fn inspect_page(&mut self, key: &str, after: i64) {
         let mut request = self.detail_request.clone();
@@ -490,6 +523,9 @@ impl Controls {
         while let Ok(r) = self.rx.try_recv() {
             if r.path == "/timeline" {
                 self.loading_timeline = false;
+            }
+            if r.path == "/copy_time_range" {
+                self.archive.copying = false;
             }
             if r.path == "/command" {
                 self.pending_action = false;
@@ -573,27 +609,54 @@ impl Controls {
                         }
                         if matches!(self.tab, 1 | 2)
                             && self.pages == 1
+                            && (self.tab != 1 || !self.archive.reading_back)
                             && self.last_timeline.elapsed() > Duration::from_secs(2)
                         {
-                            self.refresh(false);
+                            self.request_timeline(false, true);
                         }
                     }
                     "/timeline" => {
                         let b = r.body.unwrap_or_default();
-                        if ["day", "kind", "source", "query"]
+                        let filter = self.filter();
+                        if ["day", "kind", "source", "query", "from", "until"]
                             .iter()
-                            .all(|k| b[*k] == self.filter()[*k])
+                            .all(|k| b[*k] == filter[*k])
                         {
-                            let rows = v["items"].as_array().cloned().unwrap_or_default();
-                            if b["before_id"].is_number() {
+                            if b["background"] == true && self.tab == 1 && self.archive.reading_back
+                            {
+                                continue;
+                            }
+                            let rows = v["items"]
+                                .as_array_mut()
+                                .map(std::mem::take)
+                                .unwrap_or_default();
+                            let append = b["before_id"].is_number();
+                            let changed = if append {
+                                !rows.is_empty()
+                            } else {
+                                self.items != rows
+                            };
+                            if append {
                                 self.items.extend(rows);
                                 self.pages += 1;
                             } else {
-                                self.items = rows;
+                                if changed {
+                                    self.items = rows;
+                                }
                                 self.pages = 1;
                             }
-                            self.jobs = v["jobs"].as_array().cloned().unwrap_or_default();
-                            self.next = v["next"].clone();
+                            if changed {
+                                self.archive.layout(&self.items);
+                            }
+                            self.archive.loaded_filter = filter;
+                            if v["activity"].is_object() {
+                                self.archive.activity = v["activity"].take();
+                            }
+                            self.jobs = v["jobs"]
+                                .as_array_mut()
+                                .map(std::mem::take)
+                                .unwrap_or_default();
+                            self.next = v["next"].take();
                         } else {
                             self.refresh(false);
                         }
@@ -604,6 +667,17 @@ impl Controls {
                             .is_some_and(|b| b["id"] == self.detail["id"])
                         {
                             self.detail["details"]["ocr_status"] = json!("pending");
+                        }
+                    }
+                    "/copy_time_range" => {
+                        if let Some(text) = v["text"].as_str() {
+                            self.archive.clipboard = Some(text.to_owned());
+                            let count = v["count"].as_u64().unwrap_or(0);
+                            self.archive.copy_receipt = format!(
+                                "Copied {count} {}",
+                                if count == 1 { "entry" } else { "entries" }
+                            );
+                            self.error.clear();
                         }
                     }
                     "/inspect" => {
@@ -676,6 +750,7 @@ impl Controls {
         if let Ok(d) = chrono::NaiveDate::parse_from_str(&day, "%Y-%m-%d") {
             self.day = d.to_string();
             self.day_edit = self.day.clone();
+            self.archive.reset_day();
             self.items.clear();
             self.jobs.clear();
             self.next = Value::Null;
@@ -697,7 +772,9 @@ impl Controls {
                     self.select_day((d + chrono::Duration::days(move_day)).to_string());
                 }
             }
-            ui.heading(&self.day);
+            if self.tab != 1 {
+                ui.heading(&self.day);
+            }
             if ui.button("Today").clicked() {
                 self.select_day(chrono::Local::now().date_naive().to_string());
             }
@@ -715,171 +792,10 @@ impl Controls {
             if ui.button("Daily text").clicked() {
                 self.send("/export_day", Some(json!({"day":self.day})));
             }
-        });
-    }
-    fn timeline(&mut self, ui: &mut egui::Ui) {
-        self.date_bar(ui);
-        ui.add_space(6.0);
-        let permissions: Value =
-            serde_json::from_str(self.status["permissions"].as_str().unwrap_or("{}"))
-                .unwrap_or(Value::Null);
-        if self.status["synthetic"] != true
-            && (permissions["microphone_permission"] != 3
-                || permissions["screen_permission"] != true
-                || !std::path::Path::new(&self.config.model_path).is_file())
-        {
-            card(ui, |ui| {
-                ui.heading("Before your first recording");
-                muted(
-                    ui,
-                    "Daybook needs a local speech model, microphone access and Screen Recording access. Nothing starts while you set them up.",
-                );
-                if ui.button("Set up access & model").clicked() {
-                    self.tab = 4;
-                    self.settings_tab = if !std::path::Path::new(&self.config.model_path).is_file()
-                    {
-                        0
-                    } else {
-                        3
-                    };
-                }
-            });
-        }
-
-        if ui.button("Quick note").clicked() {
-            self.open_note();
-        }
-        ui.horizontal_wrapped(|ui| {
-            let mut changed = false;
-            egui::ComboBox::from_id_salt("kind")
-                .selected_text(match self.kind.as_str() {
-                    "all" => "All memories",
-                    x => x,
-                })
-                .show_ui(ui, |ui| {
-                    for (k, label) in [
-                        ("all", "All memories"),
-                        ("transcript", "Conversations"),
-                        ("preview", "Live previews"),
-                        ("transcript_suppressed", "Suppressed audio"),
-                        ("note", "Notes"),
-                        ("screen", "Screens"),
-                    ] {
-                        changed |= ui
-                            .selectable_value(&mut self.kind, k.into(), label)
-                            .changed();
-                    }
-                });
-            egui::ComboBox::from_id_salt("source")
-                .selected_text(match self.source.as_str() {
-                    "all" => "All sources",
-                    x => x,
-                })
-                .show_ui(ui, |ui| {
-                    for (k, label) in [
-                        ("all", "All sources"),
-                        ("me", "Me"),
-                        ("remote", "Remote audio"),
-                        ("screen", "Screen OCR"),
-                        ("vision", "Screen vision"),
-                        ("clipboard", "Clipboard"),
-                        ("screenshot", "Saved screenshots"),
-                    ] {
-                        changed |= ui
-                            .selectable_value(&mut self.source, k.into(), label)
-                            .changed();
-                    }
-                });
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.query)
-                    .desired_width(190.0)
-                    .hint_text("Search this day"),
-            );
-            if ui.button("Search").clicked()
-                || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-            {
-                changed = true;
-            }
-            if changed {
-                self.pages = 1;
-                self.refresh(false);
-            }
-            if ui.small_button("Refresh").clicked() {
-                self.pages = 1;
-                self.refresh(false);
+            if self.tab == 1 && ui.button("New note").clicked() {
+                self.open_note();
             }
         });
-        if self.loading_timeline {
-            ui.spinner();
-        }
-        if self.items.is_empty() {
-            card(ui, |ui| {
-                ui.heading("Nothing here yet");
-                muted(
-                    ui,
-                    "Start recording, save a note, or choose another date. Paused recordings do not create new audio.",
-                );
-            });
-        }
-        for item in self.items.clone() {
-            card(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(timestamp(&item["at"]))
-                            .monospace()
-                            .color(MUTED),
-                    );
-                    ui.strong(item["source"].as_str().unwrap_or(""));
-                    let k = item["kind"].as_str().unwrap_or("");
-                    ui.label(if k == "preview" {
-                        RichText::new("LIVE PREVIEW · may change").color(MINT)
-                    } else {
-                        RichText::new(k).color(MUTED)
-                    });
-                });
-                let text = item["text"].as_str().unwrap_or("");
-                let saved_image = item["kind"] == "screen"
-                    && matches!(item["source"].as_str(), Some("clipboard" | "screenshot"));
-                ui.label(if !text.is_empty() {
-                    text
-                } else if saved_image {
-                    "Saved image"
-                } else {
-                    "Waiting for speech or model output…"
-                });
-                ui.horizontal(|ui| {
-                    if ui
-                        .small_button(if saved_image {
-                            "Open saved image entry"
-                        } else if item["truncated"] == true {
-                            "Read full entry & inspect"
-                        } else {
-                            "Inspect evidence"
-                        })
-                        .clicked()
-                    {
-                        self.inspect("observation", item["id"].as_i64().unwrap(), None);
-                    }
-                    ui.small(format!("#{}", item["id"]));
-                });
-            });
-        }
-        if !self.next.is_null() && self.items.len() < 1000 {
-            if ui.button("Load earlier memories").clicked() {
-                self.refresh(true);
-            }
-        } else if self.items.len() >= 1000 {
-            muted(
-                ui,
-                "1,000 entries loaded. Narrow the date/search to inspect more without growing this window indefinitely.",
-            );
-        }
-        if self.pages > 1 {
-            muted(
-                ui,
-                "Browsing history; automatic refresh is paused. Refresh returns to the latest entries.",
-            );
-        }
     }
     fn brief(&mut self, ui: &mut egui::Ui) {
         self.date_bar(ui);
@@ -1712,18 +1628,11 @@ impl Controls {
         });
     }
     fn inspector(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.heading("Evidence");
-            if ui.button("×").clicked() {
-                self.detail = Value::Null;
-                self.detail_request = Value::Null;
-                self.history.clear();
-            }
-        });
         if !self.history.is_empty() && ui.button("‹ Back").clicked() {
             if let Some((req, v)) = self.history.pop() {
                 self.detail_request = req;
                 self.detail = v;
+                self.picture.clear();
             }
         }
         let v = self.detail.clone();
@@ -1731,17 +1640,35 @@ impl Controls {
             ui.spinner();
             return;
         }
-        ui.label(
-            RichText::new(format!(
-                "{} #{}",
-                v["kind"].as_str().unwrap_or("Entry"),
-                v["id"]
-            ))
-            .strong(),
-        );
+        let observation = self.detail_request["kind"] == "observation";
+        if observation {
+            let label = reading::entry_label(
+                v["kind"].as_str().unwrap_or(""),
+                v["source"].as_str().unwrap_or(""),
+            );
+            ui.heading(label);
+            muted(ui, full_timestamp(&v["at"]));
+        } else {
+            ui.label(
+                RichText::new(format!(
+                    "{} #{}",
+                    v["kind"].as_str().unwrap_or("Entry"),
+                    v["id"]
+                ))
+                .strong(),
+            );
+        }
         let saved_image = v["details"]["saved_image"] == true;
+        if v["image_retained"] == true {
+            if let Some(id) = v["id"].as_i64() {
+                self.picture.show(ui, &self.base, id);
+            }
+        }
         if let Some(text) = v["text"].as_str().filter(|text| !text.is_empty()) {
-            if (saved_image || v["source"] == "clipboard") && ui.button("Copy text").clicked() {
+            if v["kind"] == "screen" {
+                ui.strong("Text from image");
+            }
+            if observation && ui.button("Copy text").clicked() {
                 ui.ctx().copy_text(text.to_owned());
             }
             ui.label(text);
@@ -1776,13 +1703,6 @@ impl Controls {
             );
         }
         if saved_image {
-            muted(
-                ui,
-                format!(
-                    "Saved PNG · {} × {} pixels",
-                    v["details"]["width"], v["details"]["height"]
-                ),
-            );
             match v["details"]["ocr_status"].as_str() {
                 Some("pending") => {
                     ui.label("Reading image text…");
@@ -1800,9 +1720,6 @@ impl Controls {
             }
         }
         let image_action = if saved_image {
-            if v["image_retained"] == true && ui.button("Open saved PNG").clicked() {
-                self.send("/reveal_image", Some(json!({"id":v["id"],"open":true})));
-            }
             "Show saved PNG in Finder"
         } else {
             "Reveal retained screen image"
@@ -1810,7 +1727,7 @@ impl Controls {
         if v["image_retained"] == true && ui.button(image_action).clicked() {
             self.send("/reveal_image", Some(json!({"id":v["id"]})));
         }
-        if let Some(a) = v["sources"].as_array() {
+        if let Some(a) = v["sources"].as_array().filter(|s| !s.is_empty()) {
             ui.separator();
             ui.strong("Audio sources");
             for s in a {
@@ -2052,6 +1969,8 @@ impl eframe::App for Controls {
             return;
         }
         self.poll();
+        self.picture.poll(ctx);
+        self.archive.flush_clipboard(ctx);
         let hidden = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
         self.minimized
             .store(hidden, std::sync::atomic::Ordering::Relaxed);

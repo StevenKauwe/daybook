@@ -54,12 +54,14 @@ impl Controls {
             self.navigate(0);
             self.focus = !self.focus;
         }
-        if (self.note_open || self.focus)
+        if (self.note_open || !self.detail_request.is_null() || self.focus)
             && !egui::Popup::is_any_open(ctx)
             && ctx.input_mut(|s| s.consume_key(Modifiers::NONE, Key::Escape))
         {
             if self.note_open {
                 self.note_open = false;
+            } else if !self.detail_request.is_null() {
+                self.close_entry();
             } else {
                 self.focus = false;
             }
@@ -388,33 +390,40 @@ impl Controls {
                         divider.center().y,
                         egui::Stroke::new(1., LINE),
                     );
-                    egui::ScrollArea::vertical()
-                        .id_salt((
-                            "workspace_page",
-                            self.tab,
-                            self.settings_tab,
-                            self.health_tab,
-                        ))
-                        .show(ui, |ui| match self.tab {
-                            1 => self.timeline(ui),
-                            2 => self.brief(ui),
-                            3 => self.health(ui),
-                            _ => self.settings(ui),
-                        });
+                    if self.tab == 1 {
+                        self.timeline(ui);
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt((
+                                "workspace_page",
+                                self.tab,
+                                self.settings_tab,
+                                self.health_tab,
+                            ))
+                            .show(ui, |ui| match self.tab {
+                                2 => self.brief(ui),
+                                3 => self.health(ui),
+                                _ => self.settings(ui),
+                            });
+                    }
                 }
             });
         if !self.detail_request.is_null() {
             let mut open = true;
-            egui::Window::new("Source inspector")
+            let title = if self.detail_request["kind"] == "observation" {
+                "Journal entry"
+            } else {
+                "Source inspector"
+            };
+            egui::Window::new(title)
+                .id(egui::Id::new("entry_inspector"))
                 .open(&mut open)
-                .default_width(440.)
+                .default_width(660.)
                 .default_height(520.)
                 .vscroll(true)
                 .show(ui.ctx(), |ui| self.inspector(ui));
             if !open {
-                self.detail_request = Value::Null;
-                self.detail = Value::Null;
-                self.history.clear();
+                self.close_entry();
             }
         }
         if self.show_export {

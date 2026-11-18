@@ -40,6 +40,53 @@ pub(super) fn fixture(tx: SyncSender<Request>, rx: Receiver<Reply>) -> Controls 
     // Keep the normal startup/jump behavior; previews must exercise the real reader.
     c
 }
+pub(super) fn archive_fixture(c: &mut Controls, selection: bool) {
+    let day = chrono::Local::now().date_naive();
+    let local = |h, m| {
+        day.and_hms_opt(h, m, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .earliest()
+            .unwrap()
+            .timestamp()
+    };
+    let start = local(0, 0);
+    let end = day
+        .succ_opt()
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_local_timezone(chrono::Local)
+        .earliest()
+        .unwrap()
+        .timestamp();
+    c.tab = 1;
+    c.day = day.to_string();
+    c.day_edit = c.day.clone();
+    c.items=[
+        (15,42,"note","me","Start the listening walk at the stone steps. The first thing you hear there is the rigging, before the ferry comes into view."),
+        (15,34,"screen","screenshot","Waterfront walk · route map and recording stops"),
+        (15,22,"transcript","remote","Give people a moment on the water before they turn toward the market."),
+        (15,9,"note","clipboard","Saturday ferry times: 8:15, 9:00 and 9:45."),
+        (14,52,"transcript","me","I’ll take the recorder back on Saturday and get a second pass."),
+        (14,28,"screen","clipboard","Field notes from the first walk"),
+        (10,12,"note","me","Bring spare batteries and the wind cover."),
+        (9,35,"transcript","me","Let’s follow the shoreline from the station.")
+    ].iter().enumerate().map(|(i,(h,m,k,s,t))|json!({"id":20-i,"at":local(*h,*m),"kind":k,"source":s,"text":t})).collect();
+    let mut bins = vec![0u32; ((end - start) / 900) as usize];
+    for i in &c.items {
+        bins[((i["at"].as_i64().unwrap() - start) / 900) as usize] += 1;
+    }
+    c.archive.activity = json!({"start":start,"end":end,"bins":bins});
+    if selection {
+        let (a, b) = (local(14, 20), local(15, 50));
+        c.archive.selection = Some((a, b));
+        c.items
+            .retain(|i| i["at"].as_i64().is_some_and(|t| t >= a && t < b));
+    }
+    c.archive.layout(&c.items);
+    c.archive.loaded_filter = c.filter();
+}
 pub(super) fn sample_db(t: f64, track: usize) -> f32 {
     let x = t + track as f64 * 2.19;
     let envelope =
@@ -56,6 +103,8 @@ pub(super) fn run(path: std::path::PathBuf, args: &[String]) {
         enabled("--empty"),
         enabled("--night"),
     );
+    let archive = enabled("--archive");
+    let selection = enabled("--selection");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Daybook — synthetic design preview")
@@ -76,6 +125,9 @@ pub(super) fn run(path: std::path::PathBuf, args: &[String]) {
             let (_replies, rx) = mpsc::sync_channel(12);
             let mut c = fixture(tx, rx);
             c.preview_output = Some(path);
+            if archive {
+                archive_fixture(&mut c, selection);
+            }
             if empty {
                 c.set_stream_page(
                     json!({"day":chrono::Local::now().date_naive().to_string(),"items":[]}),

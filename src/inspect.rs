@@ -199,44 +199,144 @@ pub fn transcript(s: &Store, v: &Value) -> Result<Value> {
     }
     Ok(json!({"day":day,"items":rows,"older":older,"newer":later,"total":total,"limit":80}))
 }
-pub fn timeline(s: &Store, v: &Value) -> Result<Value> {
-    let day = v["day"].as_str().ok_or("day missing")?;
-    let (start, end) = day_bounds(day)?;
-    let kind = v["kind"].as_str().unwrap_or("all");
-    let source = v["source"].as_str().unwrap_or("all");
-    let query = v["query"].as_str().unwrap_or("");
-    if query.len() > 200 {
-        return Err("search is limited to 200 bytes".into());
-    }
-    if ![
-        "all",
-        "transcript",
-        "preview",
-        "note",
-        "screen",
-        "event",
-        "preview_abandoned",
-        "transcript_suppressed",
-    ]
-    .contains(&kind)
-        || ![
+struct ArchiveQuery<'a> {
+    day: &'a str,
+    bounds: (i64, i64),
+    selected: Option<(i64, i64)>,
+    kind: &'a str,
+    source: &'a str,
+    query: &'a str,
+}
+
+impl<'a> ArchiveQuery<'a> {
+    fn parse(v: &'a Value) -> Result<Self> {
+        let day = v["day"].as_str().ok_or("day missing")?;
+        let (start, end) = day_bounds(day)?;
+        let kind = v["kind"].as_str().unwrap_or("all");
+        let source = v["source"].as_str().unwrap_or("all");
+        let query = v["query"].as_str().unwrap_or("");
+        if query.len() > 200 {
+            return Err("search is limited to 200 bytes".into());
+        }
+        if ![
             "all",
-            "me",
-            "remote",
+            "transcript",
+            "preview",
+            "note",
             "screen",
-            "vision",
-            "system",
-            "clipboard",
-            "screenshot",
+            "event",
+            "preview_abandoned",
+            "transcript_suppressed",
         ]
-        .contains(&source)
-    {
-        return Err("invalid timeline filter".into());
+        .contains(&kind)
+            || ![
+                "all",
+                "me",
+                "remote",
+                "screen",
+                "vision",
+                "system",
+                "clipboard",
+                "screenshot",
+            ]
+            .contains(&source)
+        {
+            return Err("invalid timeline filter".into());
+        }
+        let selected = match (v.get("from"), v.get("until")) {
+            (None, None) => None,
+            (Some(a), Some(b)) => {
+                let from = a.as_i64().ok_or("Invalid selection start")?;
+                let until = b.as_i64().ok_or("Invalid selection end")?;
+                if !(start <= from && from < until && until <= end) {
+                    return Err("Select a time range within this day".into());
+                }
+                Some((from, until))
+            }
+            _ => return Err("Both ends of the time selection are required".into()),
+        };
+        Ok(Self {
+            day,
+            bounds: (start, end),
+            selected,
+            kind,
+            source,
+            query,
+        })
     }
+}
+
+// Timestamped passages can straddle the start of a selected range. Ordinary day browsing
+// keeps the existing source-date convention and its indexed range scan.
+const DAY_ENTRIES: &str = "observations WHERE at>=?1 AND at<?2";
+const RANGE_ENTRIES: &str = "(SELECT * FROM observations WHERE at>=?1 AND at<?2
+    UNION ALL SELECT * FROM observations INDEXED BY obs_span_end WHERE at<?1 AND end_at>?1 AND end_at>at) WHERE 1";
+const MATCH_ENTRY: &str =
+    "((?3='all' AND kind IN ('transcript','preview','note','screen')) OR kind=?3)
+    AND (?4='all' OR source=?4) AND (?5='' OR instr(lower(text),lower(?5))>0)";
+
+pub fn copy_time_range(s: &Store, v: &Value) -> Result<Value> {
+    use std::fmt::Write;
+    let f = ArchiveQuery::parse(v)?;
+    let (start, end) = f.selected.ok_or("Select a time range first")?;
+    let stamp = |at: i64| {
+        chrono::DateTime::from_timestamp(at, 0)
+            .map(|d| {
+                d.with_timezone(&chrono::Local)
+                    .format("%H:%M:%S %Z")
+                    .to_string()
+            })
+            .unwrap_or_default()
+    };
+    let mut text = format!("Daybook · {} · {} – {}\n", f.day, stamp(start), stamp(end));
+    let mut count = 0usize;
+    let mut q = s.db.prepare(&format!(
+        "SELECT at,kind,source,text FROM {RANGE_ENTRIES} AND {MATCH_ENTRY} ORDER BY at,id"
+    ))?;
+    let mut rows = q.query(params![start, end, f.kind, f.source, f.query])?;
+    while let Some(r) = rows.next()? {
+        let value = r.get_ref(3)?.as_str()?;
+        let kind = r.get_ref(1)?.as_str()?;
+        let source = r.get_ref(2)?.as_str()?;
+        let body = value.trim();
+        if body.is_empty() && kind != "screen" {
+            continue;
+        }
+        if text.len().saturating_add(body.len()).saturating_add(128) > 2 * 1024 * 1024 {
+            return Err(
+                "This selection exceeds 2 MiB. Choose a shorter range to copy it in full.".into(),
+            );
+        }
+        writeln!(
+            text,
+            "\n{}  {}",
+            stamp(r.get(0)?),
+            crate::reading::entry_label(kind, source)
+        )?;
+        if !body.is_empty() {
+            writeln!(text, "{body}")?;
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return Err("No matching entries in the selected time range".into());
+    }
+    Ok(json!({"text":text,"count":count}))
+}
+
+pub fn timeline(s: &Store, v: &Value) -> Result<Value> {
+    let f = ArchiveQuery::parse(v)?;
+    let day = f.day;
+    let (start, end) = f.selected.unwrap_or(f.bounds);
+    let time = if f.selected.is_some() {
+        RANGE_ENTRIES
+    } else {
+        DAY_ENTRIES
+    };
     let before_at = v["before_at"].as_i64().unwrap_or(i64::MAX);
     let before_id = v["before_id"].as_i64().unwrap_or(i64::MAX);
-    let mut q=s.db.prepare("SELECT id,at,end_at,kind,source,substr(text,1,1200),length(text)>1200,source_id FROM observations WHERE at>=?1 AND at<?2 AND ((?3='all' AND kind IN ('transcript','preview','note','screen')) OR kind=?3) AND (?4='all' OR source=?4) AND instr(lower(text),lower(?5))>0 AND (at<?6 OR (at=?6 AND id<?7)) ORDER BY at DESC,id DESC LIMIT 101")?;
-    let mut rows=q.query_map(params![start,end,kind,source,query,before_at,before_id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"truncated":r.get::<_,bool>(6)?,"source_id":r.get::<_,Option<i64>>(7)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
+    let mut q=s.db.prepare(&format!("SELECT id,at,end_at,kind,source,substr(text,1,1200),length(text)>1200,source_id FROM {time} AND {MATCH_ENTRY} AND (at<?6 OR (at=?6 AND id<?7)) ORDER BY at DESC,id DESC LIMIT 101"))?;
+    let mut rows=q.query_map(params![start,end,f.kind,f.source,f.query,before_at,before_id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"truncated":r.get::<_,bool>(6)?,"source_id":r.get::<_,Option<i64>>(7)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
     let more = rows.len() > 100;
     rows.truncate(100);
     let cursor = if more {
@@ -247,7 +347,22 @@ pub fn timeline(s: &Store, v: &Value) -> Result<Value> {
     };
     let mut q=s.db.prepare("SELECT id,kind,lo,hi,status,substr(text,1,2000),error FROM jobs WHERE id IN (SELECT job_id FROM job_days WHERE day=?1) ORDER BY id DESC LIMIT 50")?;
     let jobs=q.query_map([day],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"kind":r.get::<_,String>(1)?,"lo":r.get::<_,i64>(2)?,"hi":r.get::<_,i64>(3)?,"status":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"error":r.get::<_,String>(6)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
-    Ok(json!({"day":day,"items":rows,"next":cursor,"jobs":jobs,"summary_limit":50}))
+    let mut result = json!({"day":day,"items":rows,"next":cursor,"jobs":jobs,"summary_limit":50});
+    if v["activity"] == true && v["before_id"].is_null() {
+        let (start, end) = f.bounds;
+        let mut bins = vec![0u32; ((end - start + 899) / 900) as usize];
+        let mut q = s.db.prepare(&format!(
+            "SELECT (at-?1)/900,count(*) FROM {DAY_ENTRIES} AND {MATCH_ENTRY} GROUP BY 1"
+        ))?;
+        let mut values = q.query(params![start, end, f.kind, f.source, f.query])?;
+        while let Some(row) = values.next()? {
+            if let Some(bin) = bins.get_mut(row.get::<_, u32>(0)? as usize) {
+                *bin = row.get(1)?;
+            }
+        }
+        result["activity"] = json!({"start":start,"end":end,"bins":bins});
+    }
+    Ok(result)
 }
 pub fn inspect(s: &Store, v: &Value) -> Result<Value> {
     let kind = v["kind"].as_str().ok_or("inspection kind missing")?;
@@ -396,6 +511,83 @@ pub fn source(s: &Store, id: i64) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn time_selection_uses_complete_entries_across_pages_and_keeps_chronology() {
+        let root = tempfile::tempdir().unwrap();
+        let s = Store::open(root.path()).unwrap();
+        let day = "2026-11-17";
+        let (start, _) = day_bounds(day).unwrap();
+        let a = start + 9 * 3600;
+        let b = a + 1800;
+        s.observation(
+            a - 5,
+            a + 3,
+            "transcript",
+            "me",
+            "opening words",
+            &json!({}),
+            None,
+        )
+        .unwrap();
+        s.observation(
+            a - 10,
+            a,
+            "transcript",
+            "remote",
+            "ends before range",
+            &json!({}),
+            None,
+        )
+        .unwrap();
+        let long = "全文 ".repeat(650);
+        for i in 0..105 {
+            let value = if i == 104 {
+                long.clone()
+            } else {
+                format!("Note {i:03}")
+            };
+            s.observation(a + i, a + i, "note", "clipboard", &value, &json!({}), None)
+                .unwrap();
+        }
+        s.observation(b, b, "note", "me", "at exclusive end", &json!({}), None)
+            .unwrap();
+        let req = json!({"day":day,"from":a,"until":b,"activity":true});
+        let page = timeline(&s, &req).unwrap();
+        assert_eq!(page["items"].as_array().unwrap().len(), 100);
+        assert!(page["next"].is_object());
+        assert_eq!(
+            page["activity"]["bins"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_u64)
+                .sum::<u64>(),
+            108
+        );
+        let out = copy_time_range(&s, &req).unwrap();
+        assert_eq!(out["count"], 106);
+        let text = out["text"].as_str().unwrap();
+        assert!(
+            text.contains(long.trim())
+                && !text.contains("exclusive end")
+                && !text.contains("ends before")
+        );
+        assert!(text.find("opening words").unwrap() < text.find("Note 000").unwrap());
+        assert!(text.find("Note 000").unwrap() < text.find("Note 103").unwrap());
+        let filtered = json!({"day":day,"from":a,"until":b,"kind":"note","source":"clipboard","query":"Note 031"});
+        assert_eq!(copy_time_range(&s, &filtered).unwrap()["count"], 1);
+        assert_eq!(
+            timeline(&s, &filtered).unwrap()["items"][0]["text"],
+            "Note 031"
+        );
+        for bad in [
+            json!({"day":day}),
+            json!({"day":day,"from":b,"until":a}),
+            json!({"day":day,"from":a,"until":b,"query":"no hits"}),
+        ] {
+            assert!(copy_time_range(&s, &bad).is_err());
+        }
+    }
     #[test]
     fn reading_pages_preserve_full_day_and_provisional_identity() {
         let root = std::env::temp_dir().join(format!("daybook-reader-{}", std::process::id()));

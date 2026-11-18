@@ -30,6 +30,7 @@ impl Store {
  CREATE TABLE IF NOT EXISTS export_dirty(day TEXT PRIMARY KEY);
  CREATE TABLE IF NOT EXISTS job_days(job_id INTEGER NOT NULL REFERENCES jobs(id),day TEXT NOT NULL,PRIMARY KEY(job_id,day));
  CREATE INDEX IF NOT EXISTS obs_at ON observations(at); CREATE INDEX IF NOT EXISTS source_status ON sources(status,id);
+ CREATE INDEX IF NOT EXISTS obs_span_end ON observations(end_at,at) WHERE end_at>at;
  CREATE INDEX IF NOT EXISTS obs_pending_ocr ON observations(id) WHERE kind='screen' AND json_extract(details,'$.ocr_status')='pending';
  CREATE INDEX IF NOT EXISTS obs_live ON observations(source,id DESC) WHERE kind IN ('preview','transcript');
  CREATE INDEX IF NOT EXISTS obs_transcript_at ON observations(at,id) WHERE kind IN ('preview','transcript');

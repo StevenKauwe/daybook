@@ -1,3 +1,4 @@
+mod archive_image;
 mod config;
 mod inspect;
 mod live_audio;
@@ -412,6 +413,7 @@ fn run() -> Result<()> {
     let mut last_compress = Instant::now();
     let mut update_blocked = false;
     let mut saves = saved::Saves::new(&s, native_helper()?)?;
+    let images = archive_image::Images::new(root.clone())?;
     while !EXIT.load(Ordering::Relaxed) {
         let disk_limit = c.disk_limit_mb * 1024 * 1024;
         if let Some(result) = saves.poll(&s, disk_limit) {
@@ -529,6 +531,12 @@ fn run() -> Result<()> {
             continue;
         }
         let endpoint = &path[prefix.len()..];
+        if request.method() == &tiny_http::Method::Get {
+            if let Some(id) = endpoint.strip_prefix("/image/") {
+                images.send(id, request);
+                continue;
+            }
+        }
         if request.method() == &tiny_http::Method::Get && endpoint.starts_with("/source/") {
             let id = endpoint
                 .trim_start_matches("/source/")
@@ -619,6 +627,7 @@ fn run() -> Result<()> {
                     update::begin(&root, synthetic)?;
                 }
                 "/timeline" => return Ok(inspect::timeline(&s, &v)?.to_string()),
+                "/copy_time_range" => return Ok(inspect::copy_time_range(&s, &v)?.to_string()),
                 "/transcript" => return Ok(inspect::transcript(&s, &v)?.to_string()),
                 "/inspect" => return Ok(inspect::inspect(&s, &v)?.to_string()),
                 "/export_day" => {

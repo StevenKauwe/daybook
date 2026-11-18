@@ -15,11 +15,17 @@ install-built:
 verify-install:
     python3 scripts/install.py --verify
 
-# Measure local Vision OCR on generated pages, without opening capture devices.
-benchmark-ocr:
+_ocr-helper:
     python3 scripts/vendor_speechworks.py --ensure
     RUSTC_WRAPPER= CARGO_BUILD_JOBS=1 cargo build --release --locked --manifest-path native-rust/Cargo.toml
+
+# Measure local Vision OCR on generated pages.
+benchmark-ocr: _ocr-helper
     python3 scripts/benchmark_ocr.py
+
+# Compare full-frame and changed-line OCR on a generated sequence (requires Pillow).
+benchmark-ocr-changes: _ocr-helper
+    python3 scripts/benchmark_changed_ocr.py
 
 open:
     open "$HOME/Applications/Daybook.app"

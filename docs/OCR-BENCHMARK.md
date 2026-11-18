@@ -19,9 +19,9 @@ At 1080p, the blank page took 111 ms and the page with 240 words took 268 ms. Th
 
 ## Run it on another Mac
 
-The [changed-region experiment](#could-daybook-read-only-what-changed) also compares full-screen OCR with reading changed lines.
-
 From the Daybook checkout, run `just benchmark-ocr`. The command builds the release helper, generates six temporary PNGs and runs the on-device Apple Vision recognizer Daybook uses for saved images. The benchmark uses generated pages for every input.
+
+To repeat the changed-region experiment below, activate a Python environment with Pillow installed and run `just benchmark-ocr-changes`. It generates all eight frames, checks the recovered lines against their original text, and reports the time spent reading them. [Experiment script](../scripts/benchmark_changed_ocr.py)
 
 The resolution cases draw the same twelve lines at the same proportions on each canvas. The density cases vary the line count at 1080p. Each round shuffles the cases. Python measures elapsed wall time around a fresh helper process and reads its peak resident memory from macOS `/usr/bin/time -l`. This measures the helper process only. The other Daybook processes and system-wide accelerator allocations are outside that figure.
 

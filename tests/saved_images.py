@@ -73,7 +73,12 @@ def verify(root):
         periodic = db.execute("INSERT INTO observations(at,end_at,kind,source,text,details) "
                               "VALUES(?,?,'screen','screen','periodic fixture',?)",
                               (at, at, json.dumps({"path": "images/periodic.jpg"}))).lastrowid
+        derived = db.execute("INSERT INTO observations(at,end_at,kind,source,text,details) "
+                             "VALUES(?,?,'screen','vision','description fixture',?)",
+                             (at, at, json.dumps({"observation_id": periodic}))).lastrowid
     with journal(root) as call:
+        assert call("/inspect", {"kind":"observation","id":derived})["image_id"] == periodic
+        assert call(f"/image/{derived}") == jpeg.read_bytes()
         for image_id, source in zip(ids, ["screenshot", "clipboard"]):
             if source == "clipboard":
                 call("/retry_saved_ocr", {"id": image_id})

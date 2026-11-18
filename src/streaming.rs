@@ -99,10 +99,10 @@ impl Streams {
         let activity = {
             let gate = self.gate(track).as_mut().unwrap();
             gate.end = end;
-            gate.detector.process(pcm, continuing)?
+            gate.detector.process(pcm, continuing, track == "remote")?
         };
-        s.state(&format!("voice_activity_{track}"),&json!({"at":crate::store::now(),"speech":activity.speech,"probability":activity.probability,"quiet_ms":activity.quiet_samples as f64/16.0,"detector":"Speechworks Silero VAD","revision":REVISION}).to_string())?;
-        if !continuing && !activity.speech {
+        s.state(&format!("voice_activity_{track}"),&json!({"at":crate::store::now(),"speech":activity.speech,"audible_playback":activity.playback,"probability":activity.probability,"quiet_ms":activity.quiet_samples as f64/16.0,"detector":"Speechworks Silero VAD","revision":REVISION}).to_string())?;
+        if !continuing && !activity.speech && !activity.playback {
             // Keep one second of preroll independently from the admission queue, so
             // quiet inputs never consume inference or pin the queue indefinitely.
             release_source(s, &self.inbox, id, "no_speech")?;
@@ -237,9 +237,7 @@ impl Streams {
         let compute_started = Instant::now();
         let text = if model.is_streaming() {
             pollster::block_on(model.transcribe_chunk(&mut x.state, &[], true))?.text
-        } else if x.pcm.is_empty()
-            || x.pcm.iter().map(|v| v * v).sum::<f32>() / (x.pcm.len() as f32) < 0.00001
-        {
+        } else if !buffered_has_signal(track, &x.pcm) {
             String::new()
         } else {
             pollster::block_on(model.transcribe(&x.pcm))?.text
@@ -366,13 +364,30 @@ fn report(
     Ok(())
 }
 fn details(ids: &[i64], final_: bool, streaming: bool) -> serde_json::Value {
-    json!({"source_ids":ids,"final":final_,"incremental_encoder":streaming,"speechworks_revision":REVISION,"speech_gate":"Speechworks Silero VAD; 1 s preroll; 0.75 s quiet endpoint; 20 s safety cap","timing":"capture-source intervals; no word alignment or diarization"})
+    json!({"source_ids":ids,"final":final_,"incremental_encoder":streaming,"speechworks_revision":REVISION,"speech_gate":"Speechworks Silero VAD with sustained playback admission for system audio, 1 s preroll, 0.75 s quiet endpoint and 20 s safety cap","timing":"capture-source intervals; no word alignment or diarization"})
 }
 fn source_day(at: i64) -> Option<chrono::NaiveDate> {
     chrono::DateTime::from_timestamp(at, 0).map(|t| t.with_timezone(&chrono::Local).date_naive())
 }
+
+fn buffered_has_signal(track: &str, pcm: &[f32]) -> bool {
+    if track == "remote" {
+        // The playback gate already qualified this phrase. Quiet preroll must not dilute it.
+        pcm.iter().any(|v| v.abs() > 0.000001)
+    } else {
+        !pcm.is_empty() && pcm.iter().map(|v| v * v).sum::<f32>() >= 0.00001 * pcm.len() as f32
+    }
+}
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn quiet_playback_in_a_buffered_phrase_survives_its_silent_preroll() {
+        let mut pcm = vec![0.; 24_000];
+        pcm[16_000..].fill(0.002);
+        assert!(super::buffered_has_signal("remote", &pcm));
+        assert!(!super::buffered_has_signal("me", &pcm));
+        assert!(!super::buffered_has_signal("remote", &[0.; 512]));
+    }
     use super::*;
     #[test]
     fn silent_source_release_is_explicit_and_original_hallucinations_are_recoverable() {

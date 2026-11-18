@@ -591,9 +591,9 @@ fn run() -> Result<()> {
     ""|"/"=>{content_type="text/html; charset=utf-8";Ok(include_str!("ui.html").replace("__PREFIX__",&prefix))},
     "/update"=>Ok(update::status(&root,synthetic).to_string()),
     "/meters"=>Ok(meters.lock().unwrap().snapshot().to_string()),
-    "/live"=>{let mut v=inspect::live(&s)?;v["capture_transition"]=json!(s.get("capture_transition"));v["transcript"]=inspect::transcript(&s,&json!({"day":chrono::Local::now().date_naive().to_string()}))?;v["memory_audio"]=inbox.lock().unwrap().stats();Ok(v.to_string())},
+    "/live"=>{let mut v=inspect::live(&s)?;v["capture_transition"]=json!(s.get("capture_transition"));v["transcript"]=inspect::transcript(&s,&json!({"day":chrono::Local::now().date_naive().to_string()}))?;v["memory_audio"]=inbox.lock().unwrap().stats();v["paste_image"]=saves.paste_status();Ok(v.to_string())},
     "/status"=>Ok(json!({"status":s.get("status"),"capture_warning":s.get("capture_warning"),"active":s.get("active"),"armed":s.get("armed"),"notice":s.get("notice"),"permissions":s.get("permissions"),"pending":s.pending(),"summary_chars":s.summary_chars(),"disk_bytes":store::disk_bytes(&root),"config":c,"observations":s.recent()?,"jobs":s.summaries()?,"synthetic":synthetic}).to_string()),
-    "/overview"=>Ok(json!({"reading":reading::ReadingStyle::saved(&s.get("reading_style")),"capture_starting":s.get("capture_starting"),"capture_stopping":s.get("capture_stopping"),"capture_transition":s.get("capture_transition"),"update":update::status(&root,synthetic),"status":s.get("status"),"capture_warning":s.get("capture_warning"),"active":s.get("active"),"armed":s.get("armed"),"notice":s.get("notice"),"permissions":s.get("permissions"),"pending":s.pending(),"summary_chars":s.summary_chars(),"disk_bytes":store::disk_bytes(&root),"config":c,"synthetic":synthetic,"draft":s.get("note_draft"),"memory_audio":inbox.lock().unwrap().stats(),"health":inspect::health(&s,&c,&mut sampler)?}).to_string()),
+    "/overview"=>Ok(json!({"reading":reading::ReadingStyle::saved(&s.get("reading_style")),"capture_starting":s.get("capture_starting"),"capture_stopping":s.get("capture_stopping"),"capture_transition":s.get("capture_transition"),"update":update::status(&root,synthetic),"status":s.get("status"),"capture_warning":s.get("capture_warning"),"active":s.get("active"),"armed":s.get("armed"),"notice":s.get("notice"),"permissions":s.get("permissions"),"pending":s.pending(),"summary_chars":s.summary_chars(),"disk_bytes":store::disk_bytes(&root),"config":c,"synthetic":synthetic,"draft":s.get("note_draft"),"draft_images":s.draft_images()?,"memory_audio":inbox.lock().unwrap().stats(),"health":inspect::health(&s,&c,&mut sampler)?}).to_string()),
     "/export"=>{s.export()?;content_type="text/plain; charset=utf-8";Ok(std::fs::read_to_string(root.join(format!("{}.txt",chrono::Local::now().date_naive())))?)},
     _=>{status=404;Ok("{}".into())}};
             }
@@ -643,6 +643,21 @@ fn run() -> Result<()> {
                     s.export()?;
                     return Ok(json!({"day":day,"text":std::fs::read_to_string(root.join(format!("{day}.txt")))?}).to_string());
                 }
+                "/paste_image" => {
+                    if synthetic || update::busy(&root) {
+                        return Err(
+                            "Image paste is unavailable during an update or a synthetic run".into(),
+                        );
+                    }
+                    let version = v["version"].as_i64().ok_or("Clipboard version required")?;
+                    let ticket = saves.paste_image(&s, version, v["attach"] == true, disk_limit)?;
+                    return Ok(json!({"ticket": ticket}).to_string());
+                }
+                "/detach_draft_image" => {
+                    let id = v["id"].as_i64().ok_or("Image ID required")?;
+                    s.db.execute("DELETE FROM note_draft_images WHERE image_id=?1", [id])?;
+                    return Ok(json!({"draft_images":s.draft_images()?}).to_string());
+                }
                 "/retry_saved_ocr" => {
                     let id = v["id"].as_i64().ok_or("Observation ID required")?;
                     let item = inspect::inspect(&s, &json!({"kind":"observation","id":id}))?;
@@ -686,6 +701,24 @@ fn run() -> Result<()> {
                     Command::new("/usr/bin/open")
                         .arg("-R")
                         .arg(root.join(item["path"].as_str().ok_or("source path missing")?))
+                        .spawn()?;
+                }
+                "/reveal_passage_audio" => {
+                    let item = inspect::inspect(&s, &json!({"kind":"observation","id":v["id"]}))?;
+                    let paths: Vec<_> = item["sources"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|part| part["retained"] == true)
+                        .filter_map(|part| part["path"].as_str())
+                        .map(|relative| root.join(relative))
+                        .collect();
+                    if paths.is_empty() {
+                        return Err("The audio for this passage is no longer saved".into());
+                    }
+                    Command::new("/usr/bin/open")
+                        .arg("-R")
+                        .args(paths)
                         .spawn()?;
                 }
                 "/command" => {
@@ -801,16 +834,7 @@ fn run() -> Result<()> {
                 }
                 "/note" => {
                     let text = v["text"].as_str().ok_or("note text missing")?;
-                    if text.len() > 16000 {
-                        return Err("note exceeds 16 KiB".into());
-                    }
-                    if text.trim().is_empty() {
-                        return Err("note is empty".into());
-                    }
-                    s.observation(now(), now(), "note", "me", text, &json!({}), None)?;
-                    if s.get("note_draft") == text {
-                        s.state("note_draft", "")?;
-                    }
+                    s.save_note(text, v["include_images"] == true)?;
                 }
                 "/synthetic_meters" if synthetic => {
                     let mut event = v.clone();

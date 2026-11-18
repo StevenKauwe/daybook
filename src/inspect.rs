@@ -61,7 +61,7 @@ fn input_levels(s: &Store) -> Value {
 pub fn live(s: &Store) -> Result<Value> {
     let mut live = Vec::new();
     for track in ["me", "remote"] {
-        let mut q=s.db.prepare("SELECT id,at,end_at,kind,substr(text,1,4000) FROM observations WHERE source=?1 AND kind IN ('preview','transcript') AND text!='' ORDER BY id DESC LIMIT 1")?;
+        let mut q=s.db.prepare("SELECT id,at,end_at,kind,substr(text,1,4000) FROM journal_entries WHERE source=?1 AND kind IN ('preview','transcript') ORDER BY id DESC LIMIT 1")?;
         live.extend(q.query_map([track],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"text":r.get::<_,String>(4)?,"track":track})))?.collect::<std::result::Result<Vec<_>,_>>()?);
     }
     Ok(
@@ -175,19 +175,19 @@ pub fn transcript(s: &Store, v: &Value) -> Result<Value> {
         .unwrap_or(if newer { i64::MIN } else { i64::MAX });
     let cmp = if newer { ">" } else { "<" };
     let order = if newer { "ASC" } else { "DESC" };
-    let mut q = s.db.prepare(&format!("SELECT id,at,end_at,kind,source,substr(text,1,4000),length(text)>4000 FROM observations WHERE at>=?1 AND at<?2 AND kind IN ('preview','transcript') AND text!='' AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)) ORDER BY at {order},id {order} LIMIT 80"))?;
+    let mut q = s.db.prepare(&format!("SELECT id,at,end_at,kind,source,substr(text,1,4000),length(text)>4000 FROM journal_entries WHERE at>=?1 AND at<?2 AND kind IN ('preview','transcript') AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)) ORDER BY at {order},id {order} LIMIT 80"))?;
     let mut rows=q.query_map(params![start,end,at,id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"truncated":r.get::<_,bool>(6)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
     if !newer {
         rows.reverse();
     }
-    let total:i64=s.db.query_row("SELECT count(*) FROM observations WHERE at>=?1 AND at<?2 AND kind IN ('preview','transcript') AND text!=''",params![start,end],|r|r.get(0))?;
+    let total:i64=s.db.query_row("SELECT count(*) FROM journal_entries WHERE at>=?1 AND at<?2 AND kind IN ('preview','transcript')",params![start,end],|r|r.get(0))?;
     let mut older = Value::Null;
     let mut later = Value::Null;
     if let (Some(first), Some(last)) = (rows.first(), rows.last()) {
         for (row, cmp, cursor) in [(first, "<", &mut older), (last, ">", &mut later)] {
             let a = row["at"].as_i64().unwrap();
             let i = row["id"].as_i64().unwrap();
-            let more:bool=s.db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM observations WHERE at>=?1 AND at<?2 AND kind IN ('preview','transcript') AND text!='' AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)))"),params![start,end,a,i],|r|r.get(0))?;
+            let more:bool=s.db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM journal_entries WHERE at>=?1 AND at<?2 AND kind IN ('preview','transcript') AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)))"),params![start,end,a,i],|r|r.get(0))?;
             if more {
                 *cursor = if cmp == "<" {
                     json!({"before_at":a,"before_id":i})
@@ -268,9 +268,9 @@ impl<'a> ArchiveQuery<'a> {
 
 // Timestamped passages can straddle the start of a selected range. Ordinary day browsing
 // keeps the existing source-date convention and its indexed range scan.
-const DAY_ENTRIES: &str = "observations WHERE at>=?1 AND at<?2";
-const RANGE_ENTRIES: &str = "(SELECT * FROM observations WHERE at>=?1 AND at<?2
-    UNION ALL SELECT * FROM observations INDEXED BY obs_span_end WHERE at<?1 AND end_at>?1 AND end_at>at) WHERE 1";
+const DAY_ENTRIES: &str = "journal_entries WHERE at>=?1 AND at<?2";
+const RANGE_ENTRIES: &str = "(SELECT * FROM journal_entries WHERE at>=?1 AND at<?2
+    UNION ALL SELECT * FROM journal_entries WHERE at<?1 AND end_at>?1 AND end_at>at) WHERE 1";
 const MATCH_ENTRY: &str =
     "((?3='all' AND kind IN ('transcript','preview','note','screen')) OR kind=?3)
     AND (?4='all' OR source=?4) AND (?5='' OR instr(lower(text),lower(?5))>0)";
@@ -377,7 +377,7 @@ pub fn copy_time_range(s: &Store, v: &Value) -> Result<Value> {
     let mut text = format!("Daybook · {} · {} – {}\n", f.day, stamp(start), stamp(end));
     let mut count = 0usize;
     let mut q = s.db.prepare(&format!(
-        "SELECT at,kind,source,text FROM {RANGE_ENTRIES} AND {MATCH_ENTRY} ORDER BY at,id"
+        "SELECT at,kind,source,text,json_array_length(details,'$.image_ids') FROM {RANGE_ENTRIES} AND {MATCH_ENTRY} ORDER BY at,id"
     ))?;
     let mut rows = q.query(params![start, end, f.kind, f.source, f.query])?;
     while let Some(r) = rows.next()? {
@@ -385,7 +385,8 @@ pub fn copy_time_range(s: &Store, v: &Value) -> Result<Value> {
         let kind = r.get_ref(1)?.as_str()?;
         let source = r.get_ref(2)?.as_str()?;
         let body = value.trim();
-        if body.is_empty() && kind != "screen" {
+        let attachments = r.get::<_, Option<i64>>(4)?.unwrap_or(0);
+        if body.is_empty() && kind != "screen" && attachments == 0 {
             continue;
         }
         if text.len().saturating_add(body.len()).saturating_add(128) > 2 * 1024 * 1024 {
@@ -402,12 +403,31 @@ pub fn copy_time_range(s: &Store, v: &Value) -> Result<Value> {
         if !body.is_empty() {
             writeln!(text, "{body}")?;
         }
+        if attachments > 0 {
+            writeln!(
+                text,
+                "[{attachments} {}]",
+                if attachments == 1 {
+                    "attached image"
+                } else {
+                    "attached images"
+                }
+            )?;
+        }
         count += 1;
     }
     if count == 0 {
         return Err("No matching entries in the selected time range".into());
     }
     Ok(json!({"text":text,"count":count}))
+}
+
+fn add_image_ref(s: &Store, row: &mut Value) -> Result<()> {
+    if row["kind"] == "screen" {
+        let id = row["id"].as_i64().ok_or("Missing image entry ID")?;
+        row["image_id"] = json!(crate::archive_image::retained_id(&s.db, &s.root, id)?);
+    }
+    Ok(())
 }
 
 pub fn timeline(s: &Store, v: &Value) -> Result<Value> {
@@ -421,10 +441,13 @@ pub fn timeline(s: &Store, v: &Value) -> Result<Value> {
     };
     let before_at = v["before_at"].as_i64().unwrap_or(i64::MAX);
     let before_id = v["before_id"].as_i64().unwrap_or(i64::MAX);
-    let mut q=s.db.prepare(&format!("SELECT id,at,end_at,kind,source,substr(text,1,1200),length(text)>1200,source_id FROM {time} AND {MATCH_ENTRY} AND (at<?6 OR (at=?6 AND id<?7)) ORDER BY at DESC,id DESC LIMIT 101"))?;
-    let mut rows=q.query_map(params![start,end,f.kind,f.source,f.query,before_at,before_id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"truncated":r.get::<_,bool>(6)?,"source_id":r.get::<_,Option<i64>>(7)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
+    let mut q=s.db.prepare(&format!("SELECT id,at,end_at,kind,source,substr(text,1,1200),length(text)>1200,source_id,CASE WHEN kind='note' THEN json_extract(details,'$.image_ids[0]') END FROM {time} AND {MATCH_ENTRY} AND (at<?6 OR (at=?6 AND id<?7)) ORDER BY at DESC,id DESC LIMIT 101"))?;
+    let mut rows=q.query_map(params![start,end,f.kind,f.source,f.query,before_at,before_id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"truncated":r.get::<_,bool>(6)?,"source_id":r.get::<_,Option<i64>>(7)?,"note_cover":r.get::<_,Option<i64>>(8)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
     let more = rows.len() > 100;
     rows.truncate(100);
+    for row in &mut rows {
+        add_image_ref(s, row)?;
+    }
     let cursor = if more {
         rows.last()
             .map(|v| json!({"before_at":v["at"],"before_id":v["id"]}))
@@ -468,7 +491,7 @@ pub fn inspect(s: &Store, v: &Value) -> Result<Value> {
                 ids.push(i);
             }
             if let Some(a) = item["details"]["source_ids"].as_array() {
-                for i in a.iter().take(32).filter_map(|v| v.as_i64()) {
+                for i in a.iter().take(64).filter_map(|v| v.as_i64()) {
                     if !ids.contains(&i) {
                         ids.push(i)
                     }
@@ -479,16 +502,8 @@ pub fn inspect(s: &Store, v: &Value) -> Result<Value> {
                     .map(|i| source(s, i))
                     .collect::<Result<Vec<_>>>()?
             );
-            let image = item["details"]["path"].as_str().unwrap_or("");
-            item["image_retained"] = json!(if item["details"]["saved_image"] == true {
-                s.db.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM saved_images WHERE observation_id=?1)",
-                    [id],
-                    |r| r.get::<_, bool>(0),
-                )?
-            } else {
-                crate::worker::valid_relative(image, "images") && s.root.join(image).is_file()
-            });
+            add_image_ref(s, &mut item)?;
+            item["image_retained"] = json!(item["image_id"].is_i64());
             Ok(item)
         }
         "job" => {
@@ -513,12 +528,12 @@ pub fn inspect(s: &Store, v: &Value) -> Result<Value> {
                     .collect::<std::result::Result<Vec<_>, _>>()?
             );
             let sql = if item["kind"] == "meta" {
-                "SELECT id,created,'summary',substr(text,1,300) FROM jobs WHERE id BETWEEN ?1 AND ?2 AND kind='incremental' AND status='done' AND id>?3 ORDER BY id LIMIT 101"
+                "SELECT id,created,'summary',substr(text,1,300),'' FROM jobs WHERE id BETWEEN ?1 AND ?2 AND kind='incremental' AND status='done' AND id>?3 ORDER BY id LIMIT 101"
             } else {
-                "SELECT id,at,kind,substr(text,1,300) FROM observations WHERE id BETWEEN ?1 AND ?2 AND kind IN ('transcript','screen','note') AND id>?3 ORDER BY id LIMIT 101"
+                "SELECT id,at,kind,substr(text,1,300),source FROM journal_entries WHERE id BETWEEN ?1 AND ?2 AND kind IN ('transcript','screen','note') AND id>?3 ORDER BY id LIMIT 101"
             };
             let mut q = s.db.prepare(sql)?;
-            item["evidence"]=json!(q.query_map(params![item["lo"].as_i64(),item["hi"].as_i64(),evidence_after],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"kind":r.get::<_,String>(2)?,"text":r.get::<_,String>(3)?})))?.collect::<std::result::Result<Vec<_>,_>>()?);
+            item["evidence"]=json!(q.query_map(params![item["lo"].as_i64(),item["hi"].as_i64(),evidence_after],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"kind":r.get::<_,String>(2)?,"text":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?})))?.collect::<std::result::Result<Vec<_>,_>>()?);
             for (key, field, after) in [
                 ("parts", "part", parts_after),
                 ("evidence", "id", evidence_after),
@@ -526,6 +541,11 @@ pub fn inspect(s: &Store, v: &Value) -> Result<Value> {
                 let rows = item[key].as_array_mut().unwrap();
                 let more = rows.len() > 100;
                 rows.truncate(100);
+                if key == "evidence" {
+                    for row in rows.iter_mut() {
+                        add_image_ref(s, row)?;
+                    }
+                }
                 let first = rows
                     .first()
                     .and_then(|r| r[field].as_i64())
@@ -600,6 +620,69 @@ pub fn source(s: &Store, id: i64) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn silent_passages_do_not_take_up_reading_pages_sessions_or_copied_ranges() {
+        let root = tempfile::tempdir().unwrap();
+        let s = Store::open(root.path()).unwrap();
+        let day = "2026-11-17";
+        let at = day_bounds(day).unwrap().0 + 3600;
+        let note = s
+            .observation(at, at, "note", "me", "Paper proof", &json!({}), None)
+            .unwrap();
+        for i in 1..180 {
+            let (kind, source) = if i % 2 == 0 {
+                ("preview", "me")
+            } else {
+                ("transcript", "remote")
+            };
+            s.observation(
+                at + i,
+                at + i + 1,
+                kind,
+                source,
+                " \t\n\u{2003}",
+                &json!({}),
+                None,
+            )
+            .unwrap();
+        }
+        s.observation(
+            at + 180,
+            at + 182,
+            "transcript",
+            "me",
+            "Hello",
+            &json!({}),
+            None,
+        )
+        .unwrap();
+        s.observation(
+            at + 183,
+            at + 183,
+            "screen",
+            "screenshot",
+            "",
+            &json!({}),
+            None,
+        )
+        .unwrap();
+        let request = json!({"day":day,"from":at,"until":at+3600,"sessions":true,"activity":true});
+        let timeline = timeline(&s, &request).unwrap();
+        assert_eq!(timeline["items"].as_array().unwrap().len(), 3);
+        assert_eq!(timeline["sessions"][0]["passages"], 1);
+        assert_eq!(timeline["sessions"][0]["screens"], 1);
+        assert_eq!(copy_time_range(&s, &request).unwrap()["count"], 3);
+        let page = transcript(&s, &json!({"day":day})).unwrap();
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["items"][0]["text"], "Hello");
+        s.db.execute(
+            "INSERT INTO jobs(kind,lo,hi,created) VALUES('incremental',?1,?2,?3)",
+            params![note, 1000, at],
+        )
+        .unwrap();
+        let detail = inspect(&s, &json!({"kind":"job","id":s.db.last_insert_rowid()})).unwrap();
+        assert_eq!(detail["evidence"].as_array().unwrap().len(), 3);
+    }
     #[test]
     fn sessions_find_related_entries_across_pages_and_keep_real_breaks() {
         let root = tempfile::tempdir().unwrap();

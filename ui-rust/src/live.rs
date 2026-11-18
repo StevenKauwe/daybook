@@ -24,6 +24,12 @@ impl Paragraph {
 fn paragraphs(rows: &[Value]) -> Vec<Paragraph> {
     let mut result: Vec<Paragraph> = Vec::new();
     for row in rows {
+        if row["text"]
+            .as_str()
+            .is_none_or(|text| text.trim().is_empty())
+        {
+            continue;
+        }
         let source = row["source"].as_str().unwrap_or("remote");
         let count = row["text"].as_str().unwrap_or("").chars().count();
         let join = result.last().is_some_and(|p| {
@@ -424,13 +430,16 @@ impl Controls {
                                     ui.label(RichText::new(source_label(&p.source)).size(13.5).strong().color(accent));
                                     if p.provisional(){design::eyebrow(ui,"Writing…",accent);}
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
-                                        ui.menu_button(RichText::new("Sources").size(11.).color(colors.muted),|ui|{
+                                        if p.parts.len()==1 {
+                                            if ui.small_button("Passage details").clicked() { self.inspect("observation",p.parts[0]["id"].as_i64().unwrap_or(0),None); }
+                                        } else { ui.menu_button(RichText::new("Passages").size(11.).color(colors.muted),|ui|{
                                             for part in &p.parts{
-                                                if ui.button(format!("{}  ·  #{}",timestamp(&part["at"]),part["id"])).clicked(){
+                                                let excerpt = part["text"].as_str().unwrap_or("").split_whitespace().take(5).collect::<Vec<_>>().join(" ");
+                                                if ui.button(format!("{} · {excerpt}",timestamp(&part["at"]))).clicked(){
                                                     self.inspect("observation",part["id"].as_i64().unwrap_or(0),None);ui.close();
                                                 }
                                             }
-                                        });
+                                        }); }
                                     });
                                 });
                                 row.add(egui::Label::new(layout.current_galley(&row)).selectable(true));

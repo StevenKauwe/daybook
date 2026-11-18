@@ -1,6 +1,7 @@
 use eframe::egui;
 use image::{ImageDecoder, ImageReader};
 use std::{
+    collections::VecDeque,
     io::{Cursor, Read},
     sync::mpsc::{self, Receiver, TryRecvError},
     time::Duration,
@@ -62,6 +63,78 @@ fn fetch(base: &str, id: i64, side: u32) -> Loaded {
         return Err("Image exceeds the viewer limit".into());
     }
     decode(&bytes, side)
+}
+
+fn load(ctx: &egui::Context, base: &str, id: i64, side: u32) -> Receiver<Loaded> {
+    let (tx, rx) = mpsc::channel();
+    let base = base.to_owned();
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(fetch(&base, id, side));
+        ctx.request_repaint();
+    });
+    rx
+}
+
+/// Share small previews between visible Archive rows and source lists.
+#[derive(Default)]
+pub struct Thumbnails {
+    cache: VecDeque<(i64, Option<egui::TextureHandle>)>,
+    loading: Option<(i64, Receiver<Loaded>)>,
+}
+impl Thumbnails {
+    pub fn paint(&mut self, ui: &egui::Ui, rect: egui::Rect, base: &str, id: i64) {
+        if !ui.is_rect_visible(rect) {
+            return;
+        }
+        if let Some((loading_id, rx)) = &self.loading {
+            match rx.try_recv() {
+                Err(TryRecvError::Empty) => {}
+                result => {
+                    let texture = result.ok().and_then(Result::ok).map(|image| {
+                        ui.ctx().load_texture(
+                            format!("thumbnail-{loading_id}"),
+                            image.pixels,
+                            egui::TextureOptions::LINEAR,
+                        )
+                    });
+                    self.cache.push_back((*loading_id, texture));
+                    if self.cache.len() > 32 {
+                        self.cache.pop_front();
+                    }
+                    self.loading = None;
+                }
+            }
+        }
+        if let Some(i) = self.cache.iter().position(|(key, _)| *key == id) {
+            let entry = self.cache.remove(i).unwrap();
+            if let Some(tex) = &entry.1 {
+                let size = tex.size_vec2();
+                let fit = (rect.width() / size.x).min(rect.height() / size.y).min(1.);
+                ui.painter().image(
+                    tex.id(),
+                    egui::Rect::from_min_size(rect.min, size * fit),
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                    egui::Color32::WHITE,
+                );
+            } else {
+                ui.painter().text(
+                    rect.left_center(),
+                    egui::Align2::LEFT_CENTER,
+                    "Preview unavailable",
+                    egui::FontId::proportional(13.),
+                    super::MUTED,
+                );
+            }
+            self.cache.push_back(entry);
+        } else {
+            ui.painter()
+                .rect_filled(rect, 3., super::design::LINE.gamma_multiply(0.5));
+            if self.loading.is_none() {
+                self.loading = Some((id, load(ui.ctx(), base, id, 256)));
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -145,15 +218,8 @@ impl Viewer {
         } else {
             ui.label("Loading image…");
             if self.loading.is_none() {
-                let (tx, rx) = mpsc::channel();
-                let base = base.to_owned();
-                let ctx = ui.ctx().clone();
-                let side = ctx.input(|i| i.max_texture_side).clamp(1, 4096) as u32;
-                self.loading = Some((id, rx));
-                std::thread::spawn(move || {
-                    let _ = tx.send(fetch(&base, id, side));
-                    ctx.request_repaint();
-                });
+                let side = ui.ctx().input(|i| i.max_texture_side).clamp(1, 4096) as u32;
+                self.loading = Some((id, load(ui.ctx(), base, id, side)));
             }
         }
     }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Speechworks VAD regression through a separate synthetic recorder, never live capture."""
-import base64, json, pathlib, sqlite3, subprocess, tempfile, time, urllib.request
+import array, base64, json, math, pathlib, sqlite3, subprocess, tempfile, time, urllib.request
 
 project=pathlib.Path(__file__).resolve().parents[1]
 root=pathlib.Path(tempfile.mkdtemp(prefix='daybook-speech-gate-'))
@@ -71,6 +71,28 @@ try:
         sizes.append(sum(db.execute("select json_extract(details,'$.frames') from source_metadata where source_id=?",(sid,)).fetchone()[0] for sid in ids))
     check('long continuous speech stays within the twenty-second model bound',max(sizes)<=320000)
     check('long speech leaves no backlog or PCM after Stop',api('/live')['pending']==0 and api('/live')['memory_audio']['pcm_bytes']==0)
+    samples = array.array('f', pcm)
+    gain = 0.003 / math.sqrt(sum(x*x for x in samples) / len(samples))
+    quiet = array.array('f', (x*gain for x in samples)).tobytes()
+    def playback(data, name):
+        api('/command', {'command':'start'})
+        start = time.time()
+        first = db.execute('select coalesce(max(id), 0) from observations').fetchone()[0]
+        for n in range(0, len(data), 32000):
+            feed('remote', data[n:n+32000], start+n/64000, name)
+        stop()
+        return [t for (t,) in db.execute("select text from journal_entries where id>? and kind='transcript' and source='remote'", (first,))]
+    quiet_words = ' '.join(playback(quiet, 'quiet-speech')).lower()
+    check('quiet system speech at -50 dBFS retains recognizable fixture words', 'country' in quiet_words or 'fellow' in quiet_words)
+    melody = [261.63,329.63,392.0,523.25,440.0,349.23,293.66,392.0]
+    def instrumental_sample(n):
+        t = n/16000
+        pitch = melody[int(t*2)%len(melody)]
+        envelope = min(1, (t % 0.5)*80) * math.exp(-4*(t % 0.5))
+        return 0.07*envelope*(math.sin(2*math.pi*pitch*t)+0.35*math.sin(4*math.pi*pitch*t))
+    notes = array.array('f',(instrumental_sample(n) for n in range(8*16000))).tobytes()
+    music_words = playback(notes, 'generated-instrumental')
+    check('an instrumental passage creates no words or blank journal entries', music_words == [])
     api('/command',{'command':'quit'});p.wait(timeout=10)
     check('synthetic backend exits cleanly',p.returncode==0)
     print(json.dumps({'passed':len(passed),'root':str(root),'mode':'synthetic fixtures only','speech_text':[text for text,_ in rows]}),flush=True)

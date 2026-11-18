@@ -3,6 +3,7 @@ use super::*;
 use chrono::{Local, NaiveDate, NaiveTime, Timelike};
 
 const ENTRY_H: f32 = 76.;
+const IMAGE_H: f32 = 118.;
 const HOUR_H: f32 = 39.;
 
 enum Line {
@@ -11,9 +12,22 @@ enum Line {
         id: i64,
         time: String,
         label: &'static str,
-        excerpt: String,
+        preview: Preview,
         accent: Color32,
     },
+}
+enum Preview {
+    Text(String),
+    Image(Option<i64>),
+}
+impl Preview {
+    fn height(&self) -> f32 {
+        if matches!(self, Self::Image(Some(_))) {
+            IMAGE_H
+        } else {
+            ENTRY_H
+        }
+    }
 }
 struct Row {
     top: f32,
@@ -89,7 +103,7 @@ impl Archive {
     pub fn layout(&mut self, items: &[Value]) {
         let anchor = if self.reading_back && !self.rewind {
             self.rows.iter().find_map(|r| match &r.line {
-                Line::Entry { id, .. } if r.top + ENTRY_H > self.offset => {
+                Line::Entry { id, preview, .. } if r.top + preview.height() > self.offset => {
                     Some((*id, r.top - self.offset))
                 }
                 _ => None,
@@ -117,20 +131,25 @@ impl Archive {
             let kind = item["kind"].as_str().unwrap_or("");
             let source = item["source"].as_str().unwrap_or("");
             let label = reading::entry_label(kind, source);
-            let mut excerpt = item["text"]
-                .as_str()
-                .unwrap_or("")
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            if excerpt.is_empty() {
-                excerpt = match kind {
-                    "screen" => "Open the screen entry",
-                    "preview" => "Listening…",
-                    _ => "Open entry",
-                }
-                .into();
-            }
+            let preview = if kind == "screen" {
+                Preview::Image(item["image_id"].as_i64())
+            } else if item["note_cover"].is_i64()
+                && item["text"]
+                    .as_str()
+                    .is_none_or(|text| text.trim().is_empty())
+            {
+                Preview::Image(item["note_cover"].as_i64())
+            } else {
+                Preview::Text(
+                    item["text"]
+                        .as_str()
+                        .unwrap_or("")
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )
+            };
+            let height = preview.height();
             let accent = match kind {
                 "note" => design::MINT,
                 "screen" => Color32::from_rgb(151, 87, 37),
@@ -142,11 +161,11 @@ impl Archive {
                     id,
                     time: clock(at, "%-I:%M"),
                     label,
-                    excerpt,
+                    preview,
                     accent,
                 },
             });
-            self.height += ENTRY_H;
+            self.height += height;
         }
         self.restore_offset = anchor.and_then(|(id, delta)| {
             self.rows.iter().find_map(|r| {
@@ -656,10 +675,11 @@ impl Controls {
                         id,
                         time,
                         label,
-                        excerpt,
+                        preview,
                         accent,
                     } => {
-                        let rect = egui::Rect::from_min_size(origin, egui::vec2(width, ENTRY_H));
+                        let rect =
+                            egui::Rect::from_min_size(origin, egui::vec2(width, preview.height()));
                         let response = ui.interact(
                             rect,
                             ui.make_persistent_id(("archive_entry", id)),
@@ -669,7 +689,10 @@ impl Controls {
                             egui::WidgetInfo::labeled(
                                 egui::WidgetType::Button,
                                 true,
-                                format!("{time}, {label}, {excerpt}"),
+                                match preview {
+                                    Preview::Text(excerpt) => format!("{time}, {label}, {excerpt}"),
+                                    Preview::Image(_) => format!("{time}, {label}"),
+                                },
                             )
                         });
                         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -697,16 +720,38 @@ impl Controls {
                             egui::FontId::proportional(13.),
                             *accent,
                         );
-                        let mut job = egui::text::LayoutJob::simple(
-                            excerpt.clone(),
-                            design::passage_font(18.),
-                            design::TEXT,
-                            (width - 101.).max(35.),
-                        );
-                        job.wrap.max_rows = 2;
-                        job.wrap.break_anywhere = false;
-                        let galley = p.layout_job(job);
-                        p.galley(origin + egui::vec2(75., 26.), galley, design::TEXT);
+                        match preview {
+                            Preview::Image(Some(image_id)) => self.thumbnails.paint(
+                                ui,
+                                egui::Rect::from_min_size(
+                                    origin + egui::vec2(75., 27.),
+                                    egui::vec2((width - 106.).clamp(1., 220.), 80.),
+                                ),
+                                &self.base,
+                                *image_id,
+                            ),
+                            Preview::Image(None) => {
+                                p.text(
+                                    origin + egui::vec2(75., 29.),
+                                    egui::Align2::LEFT_TOP,
+                                    "Original image unavailable",
+                                    egui::FontId::proportional(14.),
+                                    MUTED,
+                                );
+                            }
+                            Preview::Text(excerpt) => {
+                                let mut job = egui::text::LayoutJob::simple(
+                                    excerpt.clone(),
+                                    design::passage_font(18.),
+                                    design::TEXT,
+                                    (width - 101.).max(35.),
+                                );
+                                job.wrap.max_rows = 2;
+                                job.wrap.break_anywhere = false;
+                                let galley = p.layout_job(job);
+                                p.galley(origin + egui::vec2(75., 26.), galley, design::TEXT);
+                            }
+                        }
                         p.text(
                             rect.right_center() - egui::vec2(9., 0.),
                             egui::Align2::RIGHT_CENTER,

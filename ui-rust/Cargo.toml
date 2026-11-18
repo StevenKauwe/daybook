@@ -10,6 +10,10 @@ ureq = { version = "2.12", features = ["json"] }
 url = "2"
 chrono = "0.4"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+block2 = "0.6.2"
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSEvent", "NSPasteboard"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
 [profile.release]
 opt-level = 2
 [profile.dev]

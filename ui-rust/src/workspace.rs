@@ -299,21 +299,37 @@ impl Controls {
                 if response.changed() {
                     self.note_dirty = Some(Instant::now());
                 }
+                if !self.draft_images.is_empty() {
+                    egui::ScrollArea::vertical()
+                        .id_salt("draft_images")
+                        .max_height(165.)
+                        .show(ui, |ui| {
+                            for id in self.draft_images.clone() {
+                                ui.horizontal(|ui| {
+                                    if self.image_link(ui, id) {
+                                        self.inspect("observation", id, None);
+                                        self.note_open = false;
+                                    }
+                                    if ui.small_button("Remove from note").clicked() {
+                                        self.send("/detach_draft_image", Some(json!({"id":id})));
+                                    }
+                                });
+                            }
+                        });
+                }
                 ui.horizontal(|ui| {
-                    muted(ui, "Draft saved locally as you type");
+                    self.paste_button(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let valid = !self.note.trim().is_empty() && !self.saving_note;
                         if ui
                             .add_enabled(
-                                valid,
+                                self.can_save_note(),
                                 egui::Button::new(RichText::new("Save note").color(CARD))
                                     .fill(MINT),
                             )
                             .on_hover_text("Save note  ⌘↩")
                             .clicked()
-                            && self.send("/note", Some(json!({"text":self.note})))
                         {
-                            self.saving_note = true;
+                            self.save_note();
                         }
                     });
                 });
@@ -416,7 +432,7 @@ impl Controls {
             let title = if self.detail_request["kind"] == "observation" {
                 "Journal entry"
             } else {
-                "Source inspector"
+                "Source details"
             };
             egui::Window::new(title)
                 .id(egui::Id::new("entry_inspector"))
@@ -477,6 +493,40 @@ impl Controls {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn passage_inspector_renders_one_duration_without_unavailable_chunk_buttons() {
+        let (tx, _) = mpsc::sync_channel(12);
+        let (_, rx) = mpsc::sync_channel(12);
+        let mut c = preview::fixture(tx, rx);
+        c.detail_request = json!({"kind":"observation","id":15});
+        let chunks: Vec<_> = (41..59).map(|id| {
+            json!({"id":id,"track":"remote","retained":false,"capture_metadata":{"frames":8000,"sample_rate":16000}})
+        }).collect();
+        c.detail = json!({"id":15,"kind":"transcript","source":"remote","text":"The print proof arrived.","at":100,"end":111,"sources":chunks});
+        let ctx = egui::Context::default();
+        design::setup(&ctx);
+        let draw = |c: &mut Controls| {
+            frame(&ctx, c, [1100., 850.], vec![]);
+            frame(&ctx, c, [1100., 850.], vec![]).join("\n")
+        };
+        let words = draw(&mut c);
+        assert!(
+            words.contains("9 seconds") && words.contains("The print proof arrived."),
+            "{words}"
+        );
+        assert!(
+            ![
+                "#41",
+                "remote · unavailable",
+                "Structured provenance",
+                "Show saved audio in Finder"
+            ]
+            .iter()
+            .any(|s| words.contains(s))
+        );
+        c.detail["sources"][0]["retained"] = json!(true);
+        assert!(draw(&mut c).contains("Show saved audio in Finder"));
+    }
     fn frame(
         ctx: &egui::Context,
         c: &mut Controls,

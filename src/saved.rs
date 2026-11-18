@@ -10,7 +10,7 @@ use std::{
     process::{Command, ExitStatus, Stdio},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -21,6 +21,11 @@ const MAX_TEXT: usize = 512 * 1024;
 
 pub enum Action {
     Clipboard(i64),
+    PasteImage {
+        version: i64,
+        saved_id: Arc<AtomicI64>,
+        attach: bool,
+    },
     Screenshot,
     ReadText(i64),
 }
@@ -31,6 +36,13 @@ pub struct Saves {
     cancel_input: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     interrupted: VecDeque<i64>,
+    paste: Option<Paste>,
+}
+
+struct Paste {
+    ticket: u64,
+    saved_id: Arc<AtomicI64>,
+    error: Option<String>,
 }
 
 impl Saves {
@@ -45,11 +57,41 @@ impl Saves {
             cancel_input: Arc::new(AtomicBool::new(false)),
             shutdown: Arc::new(AtomicBool::new(false)),
             interrupted,
+            paste: None,
         })
     }
 
     pub fn busy(&self) -> bool {
         self.task.is_some()
+    }
+    pub fn paste_image(
+        &mut self,
+        store: &Store,
+        version: i64,
+        attach: bool,
+        limit: u64,
+    ) -> Result<u64> {
+        let ticket = self.paste.as_ref().map_or(1, |p| p.ticket + 1);
+        let saved_id = Arc::new(AtomicI64::new(0));
+        self.start(
+            store,
+            Action::PasteImage {
+                version,
+                saved_id: Arc::clone(&saved_id),
+                attach,
+            },
+            limit,
+        )?;
+        self.paste = Some(Paste {
+            ticket,
+            saved_id,
+            error: None,
+        });
+        Ok(ticket)
+    }
+    pub fn paste_status(&self) -> Value {
+        self.paste.as_ref().map_or(Value::Null, |p|
+            json!({"ticket":p.ticket,"image_id":p.saved_id.load(Ordering::Acquire),"error":p.error}))
     }
     pub fn cancel(&self) {
         self.cancel_input.store(true, Ordering::Release);
@@ -83,13 +125,19 @@ impl Saves {
 
     pub fn poll(&mut self, store: &Store, limit: u64) -> Option<Result<String>> {
         if self.task.as_ref().is_some_and(|task| task.is_finished()) {
-            return Some(
-                self.task
-                    .take()
-                    .unwrap()
-                    .join()
-                    .unwrap_or_else(|_| Err("Save worker stopped unexpectedly".into())),
-            );
+            let result = self
+                .task
+                .take()
+                .unwrap()
+                .join()
+                .unwrap_or_else(|_| Err("Save worker stopped unexpectedly".into()));
+            if let (Some(paste), Err(error)) = (&mut self.paste, &result)
+                && paste.saved_id.load(Ordering::Acquire) == 0
+                && paste.error.is_none()
+            {
+                paste.error = Some(error.to_string());
+            }
+            return Some(result);
         }
         if self.task.is_none() {
             if let Some(id) = self.interrupted.pop_front() {
@@ -184,8 +232,8 @@ fn run(
         return finish_ocr(s, id, helper, &image, shutdown);
     }
     check_space(s, 0, limit)?;
-    let source = match action {
-        Action::Clipboard(version) => {
+    let source = match &action {
+        Action::Clipboard(version) | Action::PasteImage { version, .. } => {
             let clip = native_result(
                 Command::new(helper)
                     .arg("--read-clipboard")
@@ -195,6 +243,9 @@ fn run(
                 cancel,
             )?;
             match clip["kind"].as_str() {
+                Some("text") if matches!(action, Action::PasteImage { .. }) => {
+                    return Err("Copy an image, then paste again".into());
+                }
                 Some("text") => {
                     let text = clip["text"].as_str().ok_or("Clipboard text unavailable")?;
                     if text.trim().is_empty() || text.len() > MAX_TEXT {
@@ -234,12 +285,16 @@ fn run(
         .take((MAX_PNG + 1) as u64)
         .read_to_end(&mut png)?;
     check_space(s, png.len(), limit)?;
-    let id = store_image(s, source, &png)?;
+    let attach = matches!(action, Action::PasteImage { attach: true, .. });
+    let id = store_image(s, source, &png, attach)?;
+    if let Action::PasteImage { saved_id, .. } = &action {
+        saved_id.store(id, Ordering::Release);
+    }
     drop(png);
     finish_ocr(s, id, helper, &image, shutdown)
 }
 
-fn store_image(s: &Store, source: &str, png: &[u8]) -> Result<i64> {
+fn store_image(s: &Store, source: &str, png: &[u8], attach: bool) -> Result<i64> {
     if png.len() > MAX_PNG || png.len() < 33 || !png.starts_with(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR") {
         return Err("Invalid PNG or image exceeds 64 MiB".into());
     }
@@ -256,6 +311,15 @@ fn store_image(s: &Store, source: &str, png: &[u8]) -> Result<i64> {
         "INSERT INTO saved_images(observation_id,png) VALUES(?1,?2)",
         params![id, png],
     )?;
+    if attach {
+        let count: i64 = tx.query_row("SELECT count(*) FROM note_draft_images", [], |row| {
+            row.get(0)
+        })?;
+        if count >= 32 {
+            return Err("Save this note before adding more than 32 images".into());
+        }
+        tx.execute("INSERT INTO note_draft_images VALUES(?1)", [id])?;
+    }
     tx.commit()?;
     Ok(id)
 }
@@ -343,6 +407,63 @@ mod tests {
     }
 
     #[test]
+    fn explicit_image_paste_keeps_the_original_with_the_draft_and_reports_plain_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Store::open(tmp.path()).unwrap();
+        s.state("note_draft", "little caption").unwrap();
+        fs::write(tmp.path().join("fixture.png"), PNG).unwrap();
+        let helper = fake_helper(
+            tmp.path(),
+            r#"case "$1" in
+            --read-clipboard) cp "$(dirname "$0")/fixture.png" "$2"; printf '%s' '{"kind":"image"}';;
+            *) printf '%s' '{"text":"words from the image"}';;
+        esac"#,
+        );
+        let mut saves = Saves::new(&s, helper).unwrap();
+        let ticket = saves.paste_image(&s, 3, true, u64::MAX).unwrap();
+        let flag = AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while saves.poll(&s, u64::MAX).is_none() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        let result = saves.paste_status();
+        let id = result["image_id"].as_i64().unwrap();
+        assert_eq!(result["ticket"], ticket);
+        assert_eq!(image_bytes(&s, id).unwrap(), PNG);
+        assert_eq!(s.draft_images().unwrap(), [id]);
+        let reopened = Store::open(tmp.path()).unwrap();
+        let note = reopened.save_note("little caption", true).unwrap();
+        assert_eq!(
+            inspect::inspect(&reopened, &json!({"kind":"observation","id":note})).unwrap()["details"]
+                ["image_ids"],
+            json!([id])
+        );
+        assert!(reopened.draft_images().unwrap().is_empty());
+        assert_eq!(reopened.get("note_draft"), "");
+        let helper = fake_helper(
+            tmp.path(),
+            r#"printf '%s' '{"kind":"text","text":"plain clipboard"}'"#,
+        );
+        assert!(
+            run(
+                &s,
+                &helper,
+                Action::PasteImage {
+                    version: 4,
+                    attach: true,
+                    saved_id: Arc::new(AtomicI64::new(0))
+                },
+                u64::MAX,
+                &flag,
+                &flag
+            )
+            .is_err()
+        );
+        assert_eq!(s.search("plain clipboard").unwrap(), json!([]));
+    }
+
+    #[test]
     fn clipboard_text_is_searchable_without_recording_or_replacing_a_draft() {
         let tmp = tempfile::tempdir().unwrap();
         let s = Store::open(tmp.path()).unwrap();
@@ -370,7 +491,7 @@ mod tests {
     fn interrupted_image_recovers_text_and_outlives_periodic_image_retention() {
         let tmp = tempfile::tempdir().unwrap();
         let s = Store::open(tmp.path()).unwrap();
-        let id = store_image(&s, "screenshot", PNG).unwrap();
+        let id = store_image(&s, "screenshot", PNG, false).unwrap();
         s.db.execute("UPDATE observations SET at=1,end_at=1 WHERE id=?1", [id])
             .unwrap();
         s.observation(now(), now(), "note", "me", "later", &json!({}), None)
@@ -442,7 +563,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let s = Store::open(tmp.path()).unwrap();
         s.db.execute_batch("CREATE TRIGGER reject_image BEFORE INSERT ON saved_images BEGIN SELECT raise(ABORT,'fixture failure'); END;").unwrap();
-        assert!(store_image(&s, "screenshot", PNG).is_err());
+        assert!(store_image(&s, "screenshot", PNG, false).is_err());
         let count: i64 =
             s.db.query_row(
                 "SELECT count(*) FROM observations WHERE kind='screen'",

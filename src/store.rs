@@ -18,7 +18,11 @@ impl Store {
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
  CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS observations(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,end_at INTEGER NOT NULL,kind TEXT NOT NULL,source TEXT NOT NULL,text TEXT NOT NULL,details TEXT NOT NULL,source_id INTEGER);
+ CREATE VIEW IF NOT EXISTS journal_entries AS SELECT * FROM observations
+ WHERE kind NOT IN ('transcript','preview','preview_abandoned','transcript_suppressed')
+ OR ltrim(text,char(9,10,11,12,13,32,133,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288))<>'';
  CREATE TABLE IF NOT EXISTS saved_images(observation_id INTEGER PRIMARY KEY REFERENCES observations(id) ON DELETE CASCADE,png BLOB NOT NULL);
+ CREATE TABLE IF NOT EXISTS note_draft_images(image_id INTEGER PRIMARY KEY REFERENCES saved_images(observation_id) ON DELETE CASCADE);
  CREATE TABLE IF NOT EXISTS sources(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,end_at INTEGER NOT NULL,track TEXT NOT NULL,path TEXT UNIQUE NOT NULL,status TEXT NOT NULL DEFAULT 'pending',error TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0);
  CREATE TABLE IF NOT EXISTS jobs(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,lo INTEGER NOT NULL,hi INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',text TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',retry_at INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL,UNIQUE(kind,lo,hi));
  CREATE TABLE IF NOT EXISTS provider_activity(id INTEGER PRIMARY KEY,started INTEGER NOT NULL,role TEXT NOT NULL,model TEXT NOT NULL,origin TEXT NOT NULL,is_local INTEGER NOT NULL,status TEXT NOT NULL,elapsed_ms INTEGER,input_bytes INTEGER NOT NULL,output_bytes INTEGER,reserved_units INTEGER NOT NULL,prompt_tokens INTEGER,completion_tokens INTEGER,estimated_usd REAL);
@@ -121,6 +125,43 @@ impl Store {
         self.observation(now(), now(), "event", "system", text, &json!({}), None)?;
         self.state("notice", text)
     }
+    pub fn draft_images(&self) -> Result<Vec<i64>> {
+        Ok(self
+            .db
+            .prepare_cached("SELECT image_id FROM note_draft_images ORDER BY image_id")?
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn save_note(&self, text: &str, include_images: bool) -> Result<i64> {
+        if text.len() > 16000 {
+            return Err("Note exceeds 16,000 bytes".into());
+        }
+        let tx = self.db.unchecked_transaction()?;
+        let images = if include_images {
+            self.draft_images()?
+        } else {
+            Vec::new()
+        };
+        if text.trim().is_empty() && images.is_empty() {
+            return Err("Add text or an image to the note".into());
+        }
+        let at = now();
+        let details = if images.is_empty() {
+            json!({})
+        } else {
+            json!({"image_ids":images})
+        };
+        let id = self.observation(at, at, "note", "me", text, &details, None)?;
+        if include_images {
+            tx.execute("DELETE FROM note_draft_images", [])?;
+        }
+        if self.get("note_draft") == text {
+            self.state("note_draft", "")?;
+        }
+        tx.commit()?;
+        Ok(id)
+    }
     /// Preserve originals for inspection, but exclude proven silent-audio hallucinations
     /// from the live reader and future compression. Missing/legacy levels are never guessed.
     pub fn suppress_proven_silence(&self) -> Result<usize> {
@@ -201,7 +242,7 @@ impl Store {
             .unwrap_or(0) as usize
     }
     pub fn recent(&self) -> Result<Value> {
-        let mut q=self.db.prepare("SELECT id,at,end_at,kind,source,text,details,source_id FROM observations ORDER BY id DESC LIMIT 100")?;
+        let mut q=self.db.prepare("SELECT id,at,end_at,kind,source,text,details,source_id FROM journal_entries ORDER BY id DESC LIMIT 100")?;
         let rows=q.query_map([],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"details":serde_json::from_str::<Value>(&r.get::<_,String>(6)?).unwrap_or(Value::Null),"source_id":r.get::<_,Option<i64>>(7)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
         Ok(json!(rows))
     }
@@ -215,7 +256,7 @@ impl Store {
             .unwrap_or(0)
     }
     pub fn search(&self, text: &str) -> Result<Value> {
-        let mut q=self.db.prepare("SELECT id,at,kind,source,text,source_id FROM observations WHERE instr(lower(text),lower(?1))>0 ORDER BY id DESC LIMIT 100")?;
+        let mut q=self.db.prepare("SELECT id,at,kind,source,text,source_id FROM journal_entries WHERE instr(lower(text),lower(?1))>0 ORDER BY id DESC LIMIT 100")?;
         let rows=q.query_map([text],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"kind":r.get::<_,String>(2)?,"source":r.get::<_,String>(3)?,"text":r.get::<_,String>(4)?,"source_id":r.get::<_,Option<i64>>(5)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
         Ok(json!(rows))
     }
@@ -260,7 +301,7 @@ impl Store {
         let sql = if kind == "meta" {
             "SELECT id,length(CAST(text AS BLOB)),'meta' FROM jobs WHERE kind='incremental' AND status='done' AND id>=?1 ORDER BY id LIMIT 30"
         } else {
-            "SELECT id,length(CAST(text AS BLOB)),date(at,'unixepoch','localtime') FROM observations WHERE kind IN ('transcript','screen','note') AND id>=?1 AND id<min(coalesce((SELECT min(id) FROM observations WHERE kind='preview'),9223372036854775807),coalesce((SELECT min(id) FROM observations WHERE kind='screen' AND json_extract(details,'$.ocr_status')='pending'),9223372036854775807)) ORDER BY id LIMIT 80"
+            "SELECT id,length(CAST(text AS BLOB)),date(at,'unixepoch','localtime') FROM journal_entries WHERE kind IN ('transcript','screen','note') AND id>=?1 AND id<min(coalesce((SELECT min(id) FROM observations WHERE kind='preview'),9223372036854775807),coalesce((SELECT min(id) FROM observations WHERE kind='screen' AND json_extract(details,'$.ocr_status')='pending'),9223372036854775807)) ORDER BY id LIMIT 80"
         };
         let mut q = self.db.prepare(sql)?;
         let mut bytes = 0;
@@ -305,7 +346,7 @@ impl Store {
         let sql = if kind == "meta" {
             "SELECT id,created,'summary',text FROM jobs WHERE id BETWEEN ?1 AND ?2 AND kind='incremental' AND status='done' ORDER BY id"
         } else {
-            "SELECT id,at,source,text FROM observations WHERE id BETWEEN ?1 AND ?2 AND kind IN ('transcript','screen','note') ORDER BY id"
+            "SELECT id,at,source,text FROM journal_entries WHERE id BETWEEN ?1 AND ?2 AND kind IN ('transcript','screen','note') ORDER BY id"
         };
         let mut q = tx.prepare(sql)?;
         let mut input = String::new();

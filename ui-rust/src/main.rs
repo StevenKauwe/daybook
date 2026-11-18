@@ -1,5 +1,5 @@
 //! Native local controls. No telemetry endpoint, browser or capture API in this process.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #[cfg_attr(
     not(test),
     expect(
@@ -20,6 +20,8 @@ mod archive;
 mod design;
 mod live;
 mod meters;
+#[allow(unsafe_code)]
+mod paste;
 mod perf;
 mod picture;
 mod preview;
@@ -102,6 +104,35 @@ fn muted(ui: &mut egui::Ui, text: impl Into<String>) {
         MUTED
     }));
 }
+fn audio_duration(item: &Value, parts: &[Value]) -> String {
+    let measured: Option<f64> = (!parts.is_empty())
+        .then(|| {
+            parts
+                .iter()
+                .map(|part| {
+                    let m = &part["capture_metadata"];
+                    Some(
+                        m["frames"].as_f64()?
+                            / m["sample_rate"].as_f64().filter(|rate| *rate > 0.)?,
+                    )
+                })
+                .sum::<Option<f64>>()
+        })
+        .flatten();
+    let seconds = measured.or_else(|| Some((item["end"].as_f64()? - item["at"].as_f64()?).max(0.)));
+    match seconds {
+        Some(s) if s > 0. && s < 1. => "under a second".into(),
+        Some(s) if s >= 1. => {
+            let n = s.round() as u64;
+            if n >= 60 {
+                format!("{}m {}s", n / 60, n % 60)
+            } else {
+                format!("{n} {}", if n == 1 { "second" } else { "seconds" })
+            }
+        }
+        _ => String::new(),
+    }
+}
 fn timestamp(v: &Value) -> String {
     v.as_i64()
         .or_else(|| v.as_f64().map(|n| n as i64))
@@ -175,6 +206,9 @@ struct Controls {
     note: String,
     note_dirty: Option<Instant>,
     saving_note: bool,
+    draft_images: Vec<i64>,
+    paste_monitor: Option<paste::Monitor>,
+    pending_paste: Option<(u64, bool)>,
     tab: usize,
     settings_tab: usize,
     health_tab: usize,
@@ -191,6 +225,7 @@ struct Controls {
     loading_timeline: bool,
     archive: archive::Archive,
     picture: picture::Viewer,
+    thumbnails: picture::Thumbnails,
     detail: Value,
     detail_request: Value,
     history: Vec<(Value, Value)>,
@@ -322,6 +357,7 @@ impl Controls {
             }
         });
         let mut c = Self::initial(base, tx, rx);
+        c.paste_monitor = paste::Monitor::install(cc.egui_ctx.clone());
         c.detailed_poll = detailed_poll;
         c.minimized = minimized;
         c.meters = meters::Feed::start(c.base.clone(), cc.egui_ctx.clone());
@@ -349,6 +385,9 @@ impl Controls {
             note: String::new(),
             note_dirty: None,
             saving_note: false,
+            draft_images: Vec::new(),
+            paste_monitor: None,
+            pending_paste: None,
             tab: 0,
             settings_tab: 0,
             health_tab: 0,
@@ -365,6 +404,7 @@ impl Controls {
             loading_timeline: false,
             archive: Default::default(),
             picture: Default::default(),
+            thumbnails: Default::default(),
             detail: Value::Null,
             detail_request: Value::Null,
             history: vec![],
@@ -482,6 +522,98 @@ impl Controls {
         self.history.clear();
         self.picture.clear();
     }
+    fn begin_paste(&mut self, version: i64) {
+        if self.pending_paste.is_none() && !self.saving_note {
+            let attach = self.note_open;
+            if self.send(
+                "/paste_image",
+                Some(json!({"version":version,"attach":attach})),
+            ) {
+                self.pending_paste = Some((0, attach));
+                self.error.clear();
+            }
+        }
+    }
+    fn paste_button(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .add_enabled(
+                self.pending_paste.is_none()
+                    && !self.saving_note
+                    && self.status["synthetic"] != true
+                    && self.preview_output.is_none(),
+                egui::Button::new(if self.pending_paste.is_some() {
+                    "Pasting…"
+                } else {
+                    "Paste image"
+                }),
+            )
+            .on_hover_text("Paste a copied image  ⌘V")
+            .clicked()
+        {
+            if let Some(version) = paste::image_version() {
+                self.begin_paste(version);
+            } else {
+                self.error = "Copy an image, then choose Paste image.".into();
+            }
+        }
+    }
+    fn pasted(&mut self, status: &Value) {
+        let Some((ticket, attach)) = self.pending_paste else {
+            return;
+        };
+        if ticket == 0 || status["ticket"].as_u64() != Some(ticket) {
+            return;
+        }
+        if let Some(error) = status["error"].as_str() {
+            self.pending_paste = None;
+            self.error = error.into();
+        } else if let Some(id) = status["image_id"].as_i64().filter(|v| *v > 0) {
+            self.pending_paste = None;
+            self.error.clear();
+            if attach {
+                if !self.draft_images.contains(&id) {
+                    self.draft_images.push(id);
+                }
+            } else {
+                self.inspect("observation", id, None);
+            }
+            self.notice = Some((
+                (if attach {
+                    "Image added to note"
+                } else {
+                    "Image saved"
+                })
+                .into(),
+                Instant::now(),
+            ));
+            if self.tab == 1 {
+                self.refresh(false);
+            }
+        }
+    }
+    fn can_save_note(&self) -> bool {
+        (!self.note.trim().is_empty() || !self.draft_images.is_empty())
+            && !self.saving_note
+            && self.pending_paste.is_none()
+    }
+    fn save_note(&mut self) {
+        if self.can_save_note()
+            && self.send(
+                "/note",
+                Some(json!({"text":self.note,"include_images":true})),
+            )
+        {
+            self.saving_note = true;
+        }
+    }
+    fn image_link(&mut self, ui: &mut egui::Ui, id: i64) -> bool {
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width().min(180.), 76.),
+            egui::Sense::click(),
+        );
+        self.thumbnails.paint(ui, rect, &self.base, id);
+        response.on_hover_text("Open image").clicked()
+    }
     fn inspect_page(&mut self, key: &str, after: i64) {
         let mut request = self.detail_request.clone();
         request[format!("{key}_after")] = json!(after);
@@ -490,8 +622,11 @@ impl Controls {
         }
     }
     fn inspection_navigation(&mut self, ui: &mut egui::Ui, v: &Value, key: &str) {
+        let page = &v[format!("{key}_page")];
+        if page["next"].is_null() && page["previous"].is_null() {
+            return;
+        }
         ui.horizontal(|ui| {
-            let page = &v[format!("{key}_page")];
             if ui
                 .add_enabled(
                     page["after"].as_i64().unwrap_or(-1) >= 0,
@@ -546,6 +681,9 @@ impl Controls {
             }
             match r.result {
                 Err(e) => {
+                    if r.path == "/paste_image" {
+                        self.pending_paste = None;
+                    }
                     self.error = e;
                     self.message.clear();
                 }
@@ -567,6 +705,7 @@ impl Controls {
                         }
                     }
                     "/live" => {
+                        self.pasted(&v["paste_image"]);
                         if self.stream_request.is_null() && v["transcript"].is_object() {
                             self.set_stream_page(v["transcript"].take());
                         }
@@ -602,6 +741,9 @@ impl Controls {
                     }
                     "/overview" => {
                         self.last_seen = Some(Instant::now());
+                        if let Some(ids) = v["draft_images"].as_array() {
+                            self.draft_images = ids.iter().filter_map(Value::as_i64).collect();
+                        }
                         if !self.loaded {
                             if let Ok(c) = serde_json::from_value(v["config"].clone()) {
                                 self.reading =
@@ -701,7 +843,26 @@ impl Controls {
                             self.detail = v;
                         }
                     }
+                    "/paste_image" => {
+                        if let Some(pending) = &mut self.pending_paste {
+                            if let Some(ticket) = v["ticket"].as_u64() {
+                                pending.0 = ticket;
+                                self.send("/live", None);
+                            } else {
+                                self.pending_paste = None;
+                                self.error = "Daybook could not start the paste.".into();
+                            }
+                        }
+                    }
+                    "/detach_draft_image" => {
+                        if let Some(ids) = v["draft_images"].as_array() {
+                            self.draft_images = ids.iter().filter_map(Value::as_i64).collect();
+                        }
+                    }
                     "/note" => {
+                        if r.body.as_ref().is_some_and(|b| b["include_images"] == true) {
+                            self.draft_images.clear();
+                        }
                         if r.body.as_ref().and_then(|b| b["text"].as_str())
                             == Some(self.note.as_str())
                         {
@@ -810,6 +971,9 @@ impl Controls {
             if self.tab == 1 && ui.button("New note").clicked() {
                 self.open_note();
             }
+            if self.tab == 1 {
+                self.paste_button(ui);
+            }
         });
     }
     fn brief(&mut self, ui: &mut egui::Ui) {
@@ -822,10 +986,6 @@ impl Controls {
                 self.command("meta");
             }
         });
-        muted(
-            ui,
-            "Source dates determine these daily summaries. Consolidation adds a layer; originals and source references remain.",
-        );
         if self.jobs.is_empty() {
             card(ui, |ui| {
                 ui.heading("Your daily brief will appear here");
@@ -843,11 +1003,9 @@ impl Controls {
                     } else {
                         "Incremental summary"
                     });
-                    ui.small(format!("#{}", j["id"]));
                 });
                 ui.label(j["text"].as_str().unwrap_or(""));
-                muted(ui, format!("Evidence IDs {}–{}", j["lo"], j["hi"]));
-                if ui.button("Trace sources & processing").clicked() {
+                if ui.button("View sources").clicked() {
                     self.inspect("job", j["id"].as_i64().unwrap(), None);
                 }
             });
@@ -1699,66 +1857,92 @@ impl Controls {
             return;
         }
         let observation = self.detail_request["kind"] == "observation";
-        if observation {
-            let label = reading::entry_label(
+        let label = if observation {
+            reading::entry_label(
                 v["kind"].as_str().unwrap_or(""),
                 v["source"].as_str().unwrap_or(""),
-            );
-            ui.heading(label);
-            muted(ui, full_timestamp(&v["at"]));
+            )
         } else {
-            ui.label(
-                RichText::new(format!(
-                    "{} #{}",
-                    v["kind"].as_str().unwrap_or("Entry"),
-                    v["id"]
-                ))
-                .strong(),
-            );
+            match v["kind"].as_str() {
+                Some("source") if v["track"] == "me" => "Microphone audio",
+                Some("source") => "System audio",
+                Some("part") => "Summary passage",
+                Some("meta") => "Daily brief",
+                _ => "Summary",
+            }
+        };
+        ui.heading(label);
+        if v["at"].is_number() {
+            let mut when = full_timestamp(&v["at"]);
+            if v["kind"] == "source"
+                || v["sources"]
+                    .as_array()
+                    .is_some_and(|parts| !parts.is_empty())
+            {
+                let parts = v["sources"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_else(|| std::slice::from_ref(&v));
+                let duration = audio_duration(&v, parts);
+                if !duration.is_empty() {
+                    when.push_str(" · ");
+                    when.push_str(&duration);
+                }
+            }
+            muted(ui, when);
         }
         let saved_image = v["details"]["saved_image"] == true;
-        if v["image_retained"] == true {
-            if let Some(id) = v["id"].as_i64() {
-                self.picture.show(ui, &self.base, id);
+        if let Some(id) = v["image_id"].as_i64() {
+            self.picture.show(ui, &self.base, id);
+        } else if v["kind"] == "screen" {
+            muted(ui, "The original image is unavailable.");
+        }
+        if let Some(ids) = v["details"]["image_ids"].as_array() {
+            for id in ids.iter().filter_map(Value::as_i64) {
+                if self.image_link(ui, id) {
+                    self.inspect("observation", id, None);
+                }
             }
         }
-        if let Some(text) = v["text"].as_str().filter(|text| !text.is_empty()) {
+        if let Some(text) = v["text"].as_str().filter(|text| !text.trim().is_empty()) {
+            let show_text = |ui: &mut egui::Ui| {
+                if observation && ui.button("Copy text").clicked() {
+                    ui.ctx().copy_text(text.to_owned());
+                }
+                ui.label(text);
+            };
             if v["kind"] == "screen" {
-                ui.strong("Text from image");
+                ui.push_id(("screen-text", &v["id"].as_i64()), |ui| {
+                    ui.collapsing(
+                        if v["source"] == "vision" {
+                            "Screen description"
+                        } else {
+                            "Text from image"
+                        },
+                        show_text,
+                    );
+                });
+            } else {
+                show_text(ui);
             }
-            if observation && ui.button("Copy text").clicked() {
-                ui.ctx().copy_text(text.to_owned());
-            }
-            ui.label(text);
         }
         if let Some(error) = v["error"].as_str().filter(|v| !v.is_empty()) {
             ui.colored_label(CORAL, error);
         }
         if v["kind"] == "source" {
-            ui.label(format!(
-                "{} · {}",
-                v["track"].as_str().unwrap_or(""),
-                v["status"].as_str().unwrap_or("")
-            ));
-            ui.label(format!(
-                "{} → {}",
-                timestamp(&v["at"]),
-                timestamp(&v["end"])
-            ));
-            ui.label(if v["storage"] == "memory (not saved)" {
-                "Audio was held only in memory. Transcript and provenance are saved.".into()
-            } else if v["retained"] == true {
-                format!("Retained · {} bytes", v["bytes"])
-            } else {
-                "Audio unavailable or expired. Provenance remains.".into()
-            });
+            if v["retained"] != true {
+                muted(
+                    ui,
+                    if v["storage"] == "memory (not saved)" {
+                        "Audio was kept only while transcribing."
+                    } else {
+                        "The recording is no longer saved."
+                    },
+                );
+            }
             if v["retained"] == true && ui.button("Reveal audio in Finder").clicked() {
                 self.send("/reveal_source", Some(json!({"id":v["id"]})));
             }
-            muted(
-                ui,
-                "Raw .f32 files are mono 16 kHz float32; retained .m4a files are playable AAC.",
-            );
         }
         if saved_image {
             match v["details"]["ocr_status"].as_str() {
@@ -1783,28 +1967,14 @@ impl Controls {
             "Reveal retained screen image"
         };
         if v["image_retained"] == true && ui.button(image_action).clicked() {
-            self.send("/reveal_image", Some(json!({"id":v["id"]})));
+            self.send("/reveal_image", Some(json!({"id":v["image_id"]})));
         }
-        if let Some(a) = v["sources"].as_array().filter(|s| !s.is_empty()) {
-            ui.separator();
-            ui.strong("Audio sources");
-            for s in a {
-                if ui
-                    .button(format!(
-                        "#{} · {} · {}",
-                        s["id"],
-                        s["track"].as_str().unwrap_or(""),
-                        if s["retained"] == true {
-                            "retained"
-                        } else {
-                            "unavailable"
-                        }
-                    ))
-                    .clicked()
-                {
-                    self.inspect("source", s["id"].as_i64().unwrap(), None);
-                }
-            }
+        if v["sources"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|part| part["retained"] == true))
+            && ui.button("Show saved audio in Finder").clicked()
+        {
+            self.send("/reveal_passage_audio", Some(json!({"id":v["id"]})));
         }
         if let Some(a) = v["days"].as_array() {
             muted(
@@ -1818,41 +1988,53 @@ impl Controls {
                 ),
             );
         }
-        if let Some(a) = v["parts"].as_array() {
-            ui.separator();
-            ui.strong("Compression checkpoints");
-            self.inspection_navigation(ui, &v, "parts");
-            for p in a {
-                if ui
-                    .button(format!(
-                        "Part {} · {} · {} input bytes",
-                        p["part"],
-                        if p["complete"] == true {
-                            "done"
-                        } else {
-                            "pending"
-                        },
-                        p["input_bytes"]
-                    ))
-                    .clicked()
-                {
-                    self.inspect("part", v["id"].as_i64().unwrap(), p["part"].as_i64());
+        if let Some(a) = v["parts"].as_array().filter(|a| !a.is_empty()) {
+            ui.collapsing("How this summary was written", |ui| {
+                self.inspection_navigation(ui, &v, "parts");
+                for p in a {
+                    if ui
+                        .button(format!(
+                            "Part {} · {}",
+                            p["part"],
+                            if p["complete"] == true {
+                                "done"
+                            } else {
+                                "pending"
+                            }
+                        ))
+                        .clicked()
+                    {
+                        self.inspect("part", v["id"].as_i64().unwrap(), p["part"].as_i64());
+                    }
                 }
-            }
+            });
         }
-        if let Some(a) = v["evidence"].as_array() {
+        if let Some(a) = v["evidence"].as_array().filter(|a| !a.is_empty()) {
             ui.separator();
-            ui.strong("Referenced evidence");
+            ui.strong("Sources");
             self.inspection_navigation(ui, &v, "evidence");
             for e in a {
-                if ui
-                    .button(format!(
-                        "#{} · {}",
-                        e["id"],
-                        e["kind"].as_str().unwrap_or("")
-                    ))
-                    .clicked()
-                {
+                let label = if e["kind"] == "summary" {
+                    "Summary"
+                } else {
+                    reading::entry_label(
+                        e["kind"].as_str().unwrap_or(""),
+                        e["source"].as_str().unwrap_or(""),
+                    )
+                };
+                let mut open = ui
+                    .button(format!("{label} · {}", timestamp(&e["at"])))
+                    .clicked();
+                if e["kind"] == "screen" {
+                    if let Some(id) = e["image_id"].as_i64() {
+                        open |= self.image_link(ui, id);
+                    } else {
+                        muted(ui, "Original image unavailable");
+                    }
+                } else {
+                    muted(ui, e["text"].as_str().unwrap_or(""));
+                }
+                if open {
                     self.inspect(
                         if e["kind"] == "summary" {
                             "job"
@@ -1863,29 +2045,18 @@ impl Controls {
                         None,
                     );
                 }
-                muted(ui, e["text"].as_str().unwrap_or(""));
             }
         }
         if let Some(input) = v["input"].as_str() {
-            ui.collapsing("Exact bounded evidence input", |ui| {
+            ui.collapsing("Text used for this summary", |ui| {
                 ui.label(input);
             });
         }
         if let Some(id) = v["details"]["observation_id"].as_i64() {
-            if ui
-                .button(format!("Original screen observation #{id}"))
-                .clicked()
-            {
+            if ui.button("Open original capture").clicked() {
                 self.inspect("observation", id, None);
             }
         }
-        ui.collapsing("Structured provenance", |ui| {
-            let raw = serde_json::to_string_pretty(&v).unwrap_or_default();
-            ui.label(RichText::new(&raw).monospace().size(11.0));
-            if ui.button("Copy provenance").clicked() {
-                ui.ctx().copy_text(raw);
-            }
-        });
     }
     fn quit(&mut self) {
         self.send("/quit", self.loaded.then(|| json!({"text":self.note})));
@@ -1970,6 +2141,16 @@ fn provider(ui: &mut egui::Ui, title: &str, p: &mut config::Provider, vision: bo
 }
 impl eframe::App for Controls {
     fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if let Some(monitor) = &self.paste_monitor {
+            monitor.enabled.set(
+                self.loaded
+                    && self.status["synthetic"] != true
+                    && (self.note_open || self.tab <= 2),
+            );
+            if let Some(version) = monitor.pending.take() {
+                self.begin_paste(version);
+            }
+        }
         if let Some(path) = &self.preview_output {
             self.preview_frames += 1;
             if self.preview_motion {
@@ -2064,14 +2245,8 @@ impl eframe::App for Controls {
                 self.note_dirty = None;
             }
         }
-        if self.note_open
-            && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter))
-            && !self.note.trim().is_empty()
-            && !self.saving_note
-        {
-            if self.send("/note", Some(json!({"text":self.note}))) {
-                self.saving_note = true;
-            }
+        if self.note_open && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter)) {
+            self.save_note();
         }
         ctx.request_repaint_after(Duration::from_millis(500));
         if self.quitting {
@@ -2189,6 +2364,37 @@ mod tests {
 }
 #[cfg(test)]
 mod interaction_tests {
+    #[test]
+    fn pasting_into_a_draft_waits_for_its_own_original_and_preserves_the_caption() {
+        let (mut c, reply, requests) = controls();
+        c.open_note();
+        c.note = "Cover proof".into();
+        c.begin_paste(12);
+        let sent = requests.try_recv().unwrap();
+        assert_eq!(sent.path, "/paste_image");
+        assert_eq!(sent.body.as_ref().unwrap()["attach"], true);
+        assert!(!c.can_save_note());
+        reply
+            .send(Reply {
+                path: sent.path,
+                body: sent.body,
+                result: Ok(json!({"ticket":7})),
+            })
+            .unwrap();
+        c.poll();
+        c.pasted(&json!({"ticket":6,"image_id":9}));
+        assert!(c.draft_images.is_empty());
+        c.pasted(&json!({"ticket":7,"image_id":10}));
+        assert_eq!(c.draft_images, [10]);
+        assert_eq!(c.note, "Cover proof");
+        assert!(c.can_save_note());
+        c.save_note();
+        assert!(
+            requests
+                .try_iter()
+                .any(|r| r.path == "/note" && r.body.unwrap()["include_images"] == true)
+        );
+    }
     #[test]
     fn quit_keeps_ui_responsive_and_waits_for_background_draft_save() {
         let (mut c, reply, requests) = controls();

@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
+<title>Daybook · Transcript studies</title>
+<style>
+:root {color-scheme:light dark}
+body {margin:0;padding:clamp(8px,3vw,38px);background:light-dark(#eeefe8,#171b18);color:light-dark(#243329,#e5ebe1);font:15px/1.45 system-ui}
+main {max-width:1010px;margin:auto}
+.study-nav {display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 13px}
+.study-nav h1 {font:normal 24px/1.15 Georgia,serif;margin:0 auto 0 0}
+.study-nav button,.study-nav select {font:inherit;color:inherit;background:light-dark(#fffdf7,#272f28);border:1px solid light-dark(#bfc8bc,#4f5d50);border-radius:7px;padding:6px 9px;cursor:pointer}
+.study-nav output {font-variant-numeric:tabular-nums}
+@media(max-width:540px){.study-nav h1{width:100%}}
+</style>
+<script>
+try {
+  const key='daybook-transcript-shortlist';
+  window.openai={widgetState:JSON.parse(localStorage.getItem(key)||'null'),setWidgetState:async (value)=>{localStorage.setItem(key,JSON.stringify(value))}};
+} catch {}
+</script>
+</head>
+<body><main>
+<nav class="study-nav" aria-label="Transcript views">
+  <h1>Transcript studies</h1>
+  <button id="prev" type="button" aria-label="Previous view">‹</button>
+  <select id="study" aria-label="Choose a view"></select>
+  <button id="next" type="button" aria-label="Next view">›</button>
+  <output id="count" aria-live="polite"></output>
+</nav>
+<div id="daybook-transcript-lab">
+  <div class="viz-carousel" aria-label="Daybook transcript designs">
+    <section data-variant="Margin notes"></section>
+    <section data-variant="Track mixer" hidden></section>
+    <section data-variant="Moment cards" hidden></section>
+    <section data-variant="Split desk" hidden></section>
+    <section data-variant="Conversation" hidden></section>
+    <section data-variant="Contact sheet" hidden></section>
+    <section data-variant="Time lens" hidden></section>
+    <section data-variant="Reading copy" hidden></section>
+    <section data-variant="Moment index" hidden></section>
+    <section data-variant="Source stacks" hidden></section>
+  </div>
+</div>
+<style>
+#daybook-transcript-lab {color-scheme:light dark;--paper:light-dark(#fffdf7,#1f231f);--ink:light-dark(#222c26,#f0eee4);--muted-ink:light-dark(#59635b,#b4bcb1);--line:light-dark(#d7dbce,#495048);--leaf:light-dark(#286449,#99d1b3);--leaf-fill:light-dark(#e5f1e6,#293e33);--iris:light-dark(#625488,#c2b4ed);--iris-fill:light-dark(#f0edf7,#373342);--ochre:light-dark(#865119,#efbd81);--sand:light-dark(#faf0da,#443a2c);--base:light-dark(#f4f3ea,#272c26);font:15px/1.42 "Inter",-apple-system,BlinkMacSystemFont,sans-serif;color:var(--ink);container-type:inline-size}
+#daybook-transcript-lab * {box-sizing:border-box}
+#daybook-transcript-lab [hidden] {display:none!important}
+#daybook-transcript-lab .db-window {isolation:isolate;position:relative;display:flex;flex-direction:column;min-height:580px;overflow:hidden;border:1px solid var(--line);border-radius:16px;background:var(--paper);color:var(--ink)}
+#daybook-transcript-lab .db-bar,#daybook-transcript-lab .db-foot,#daybook-transcript-lab .db-heading {display:flex;align-items:center;justify-content:space-between;gap:10px 18px;flex-wrap:wrap}
+#daybook-transcript-lab .db-bar {padding:12px 20px;background:var(--base);border-bottom:1px solid var(--line)}
+#daybook-transcript-lab .brand {font:500 20px Georgia,serif;letter-spacing:-.6px}
+#daybook-transcript-lab .db-bar small,#daybook-transcript-lab .db-time,#daybook-transcript-lab .db-label,#daybook-transcript-lab .micro,#daybook-transcript-lab .db-original small {color:var(--muted-ink);font:500 12px/1.4 "Inter",-apple-system,sans-serif}
+#daybook-transcript-lab .db-time,#daybook-transcript-lab output {font-variant-numeric:tabular-nums}
+#daybook-transcript-lab .db-heading {align-items:baseline;padding:18px 24px 13px}
+#daybook-transcript-lab .db-heading h2 {margin:0;color:var(--ink);font:normal 27px/1.12 Georgia,serif;letter-spacing:-.75px}
+#daybook-transcript-lab .db-scene {flex:1;padding:0 24px 8px;min-width:0}
+#daybook-transcript-lab .db-foot {padding:10px 18px;background:var(--base);border-top:1px solid var(--line)}
+#daybook-transcript-lab .db-foot label {display:flex;gap:9px;align-items:center;flex:1;min-width:140px}
+#daybook-transcript-lab .db-foot input {flex:1;min-width:46px;width:100%;accent-color:var(--leaf)}
+#daybook-transcript-lab .db-window button {font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:5px 10px;cursor:pointer}
+#daybook-transcript-lab .db-window button:focus-visible,#daybook-transcript-lab summary:focus-visible {outline:2px solid var(--leaf);outline-offset:2px}
+#daybook-transcript-lab .db-window button[aria-pressed=true],#daybook-transcript-lab .db-window button:hover {background:var(--base);border-color:var(--muted-ink)}
+#daybook-transcript-lab .db-window button:disabled {opacity:.45;cursor:default}
+#daybook-transcript-lab .db-listening {margin:7px 24px 15px;display:flex;align-items:center;gap:7px;color:var(--muted-ink);font-size:13px}
+#daybook-transcript-lab .db-light {display:inline-block;width:8px;height:8px;flex:none;border-radius:50%;background:var(--leaf)}
+#daybook-transcript-lab .db-light.off {background:var(--muted-ink)}
+#daybook-transcript-lab .db-time {white-space:nowrap}
+#daybook-transcript-lab .db-entry {margin:0 0 8px;min-width:0}
+#daybook-transcript-lab .db-by {display:flex;align-items:center;gap:6px;color:var(--leaf);font-size:12px;font-weight:600}
+#daybook-transcript-lab .sys .db-by {color:var(--iris)}
+#daybook-transcript-lab .save .db-by {color:var(--ochre)}
+#daybook-transcript-lab .db-entry p {font:normal 17px/1.34 Georgia,serif;color:var(--ink);margin:3px 0 0;overflow-wrap:anywhere}
+#daybook-transcript-lab .save p {font:normal 14px/1.42 "Inter",-apple-system,sans-serif}
+#daybook-transcript-lab .attachment {display:inline-flex;align-items:center;gap:6px;vertical-align:middle;color:var(--ochre)!important;padding:1px 5px!important;margin-left:5px}
+#daybook-transcript-lab .attachment img {display:block;width:27px;height:22px;object-fit:cover;border-radius:2px}
+#daybook-transcript-lab .db-glyph {font:600 16px/1 system-ui}
+#daybook-transcript-lab .db-row {display:grid;gap:13px;align-items:start;padding:10px 0;border-top:1px solid var(--line)}
+#daybook-transcript-lab .margin-row {grid-template-columns:55px 1.35fr minmax(128px,.85fr)}
+#daybook-transcript-lab .margin-captures {padding-left:12px;border-left:2px solid var(--line)}
+#daybook-transcript-lab .margin-captures:empty {display:none}
+#daybook-transcript-lab .cols {display:grid;grid-template-columns:1.15fr 1fr;gap:20px;align-items:start}
+#daybook-transcript-lab .cols h3,#daybook-transcript-lab .stack h3 {font:500 14px/1.3 "Inter",sans-serif;margin:0 0 9px;color:var(--ink)}
+#daybook-transcript-lab .column {min-width:0;border-top:1px solid var(--line);padding-top:10px}
+#daybook-transcript-lab .column .db-entry {padding:7px 0}
+#daybook-transcript-lab .column .linked {background:var(--sand);box-shadow:0 0 0 3px var(--sand)}
+#daybook-transcript-lab .compact-action {font-size:12px!important;padding:3px 7px!important;margin:0 0 8px}
+#daybook-transcript-lab .db-entry.bubble {border-radius:12px;padding:7px 12px;max-width:80%}
+#daybook-transcript-lab .bubble.sys {background:var(--iris-fill);margin-right:auto}
+#daybook-transcript-lab .bubble.mic {background:var(--leaf-fill);margin-left:auto}
+#daybook-transcript-lab .chat-context {margin:8px auto 10px;width:84%;padding:4px 10px;border-left:2px solid var(--ochre)}
+#daybook-transcript-lab .chat-beat {border-top:1px solid var(--line);padding:7px 0}
+#daybook-transcript-lab .chat-beat>.db-time {display:block;text-align:center;margin-bottom:6px}
+#daybook-transcript-lab .mom {border-top:1px solid var(--line);padding:8px 0}
+#daybook-transcript-lab .mom summary {color:var(--ink);cursor:pointer;padding:4px 0;font:500 15px/1.35 system-ui}
+#daybook-transcript-lab .mom summary small {margin-left:8px;color:var(--muted-ink)}
+#daybook-transcript-lab .gallery {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+#daybook-transcript-lab .tile {min-width:0;padding-top:8px;border-top:1px solid var(--line)}
+#daybook-transcript-lab .tile .thumb {display:block;width:100%;padding:0;overflow:hidden;aspect-ratio:1.72;border-radius:6px}
+#daybook-transcript-lab .thumb img {width:100%;height:100%;object-fit:cover;display:block}
+#daybook-transcript-lab .paste-paper {display:flex;align-items:center;justify-content:center;height:100%;background:var(--sand);color:var(--ochre);font:italic 19px/1.25 Georgia,serif;padding:8px}
+#daybook-transcript-lab .rail {position:relative;display:grid;grid-template-columns:83px minmax(0,1fr);gap:8px;align-items:center;margin:7px 0}
+#daybook-transcript-lab .track {height:32px;position:relative;background:var(--base);border-radius:6px}
+#daybook-transcript-lab .track button {position:absolute;top:4px;height:24px;min-width:12px;border:0;padding:0;color:var(--paper);overflow:visible;font-size:11px;background:var(--leaf)}
+#daybook-transcript-lab .track.sys button {background:var(--iris)}
+#daybook-transcript-lab .track.save button {background:var(--ochre)}
+#daybook-transcript-lab .track button[aria-pressed=true] {outline:2px solid var(--ink);outline-offset:1px}
+#daybook-transcript-lab .track-ticks {display:flex;justify-content:space-between;margin-left:91px}
+#daybook-transcript-lab .readout {padding:15px 0 3px;margin-top:11px;border-top:1px solid var(--line)}
+#daybook-transcript-lab .navline {display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:7px 0}
+#daybook-transcript-lab .index {display:grid;grid-template-columns:minmax(125px,.7fr) 1.5fr;gap:15px}
+#daybook-transcript-lab .index nav {display:grid;align-content:start;gap:6px}
+#daybook-transcript-lab .index nav button {text-align:left}
+#daybook-transcript-lab .reading {max-width:650px;margin:0 auto}
+#daybook-transcript-lab .reading .db-entry p {display:inline;font-size:21px}
+#daybook-transcript-lab .reading .save p {font-size:14px}
+#daybook-transcript-lab .reading aside {margin:8px 0 12px 20px;padding-left:12px;border-left:2px solid var(--ochre)}
+#daybook-transcript-lab .stack {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+#daybook-transcript-lab .stack section {min-width:0;border-top:3px solid var(--leaf);padding:10px 2px}
+#daybook-transcript-lab .stack section:nth-child(2) {border-color:var(--iris)}
+#daybook-transcript-lab .stack section:nth-child(3) {border-color:var(--ochre)}
+#daybook-transcript-lab .db-original {position:absolute;inset:0;z-index:2;overflow:auto;background:var(--paper);padding:20px;display:flex;flex-direction:column;gap:12px}
+#daybook-transcript-lab .db-original h3 {font:normal 24px/1.15 Georgia,serif;margin:0}
+#daybook-transcript-lab .original-head {display:flex;align-items:center;justify-content:space-between;gap:12px}
+#daybook-transcript-lab .db-original img {max-width:100%;max-height:330px;width:auto;object-fit:contain;align-self:flex-start;border:1px solid var(--line)}
+#daybook-transcript-lab .db-original blockquote {border-left:3px solid var(--ochre);margin:10px 0;padding:10px 15px;font:normal 23px/1.4 Georgia,serif}
+#daybook-transcript-lab .db-original details {border-top:1px solid var(--line);padding-top:9px}
+#daybook-transcript-lab .db-original summary {cursor:pointer}
+@container(max-width:560px) {
+  #daybook-transcript-lab .db-window {min-height:650px}
+  #daybook-transcript-lab .db-heading,#daybook-transcript-lab .db-bar,#daybook-transcript-lab .db-foot {padding-inline:12px}
+  #daybook-transcript-lab .db-scene {padding-inline:12px}
+  #daybook-transcript-lab .db-listening {margin-inline:12px}
+  #daybook-transcript-lab .margin-row {grid-template-columns:46px minmax(0,1fr);gap:5px 7px}
+  #daybook-transcript-lab .margin-captures {grid-column:2}
+  #daybook-transcript-lab .cols,#daybook-transcript-lab .stack {grid-template-columns:1fr;gap:6px}
+  #daybook-transcript-lab .gallery {grid-template-columns:repeat(2,minmax(0,1fr))}
+  #daybook-transcript-lab .index {grid-template-columns:1fr}
+  #daybook-transcript-lab .index nav {display:flex;flex-wrap:wrap}
+  #daybook-transcript-lab .db-entry.bubble {max-width:92%}
+}
+@media(pointer:coarse) {
+  #daybook-transcript-lab .db-window button {min-height:42px}
+  #daybook-transcript-lab .track {height:46px}
+}
+#daybook-transcript-lab .db-window {height:615px}
+#daybook-transcript-lab .db-scene {min-height:0;overflow:auto;scrollbar-gutter:stable}
+@container(max-width:560px) {#daybook-transcript-lab .db-window {height:700px}}
+</style>
+<script>
+(() => {
+  const root = document.getElementById('daybook-transcript-lab');
+  const events = [
+    {id:'press', at:0, end:11, lane:'sys', text:'The preview still has the old cover. Can you pull up the new one?'},
+    {id:'look', at:4, end:13, lane:'mic', text:'Here it is. The new title fits on one line.'},
+    {id:'cover', at:6, end:6, lane:'save', name:'Screenshot', text:'Field Notes · Autumn edition', asset:'cover'},
+    {id:'proof', at:19, end:30, lane:'mic', text:'I’ll send the cover to print on Friday.'},
+    {id:'stock', at:21, end:31, lane:'sys', text:'Sounds good. Use the uncoated stock.'},
+    {id:'card', at:22, end:22, lane:'save', name:'Pasted image', text:'Print proof due Friday', asset:'card'},
+    {id:'clip', at:25, end:25, lane:'save', name:'Pasted text', text:'Stock: uncoated, warm white.'}
+  ];
+  const labels = {sys:'System audio',mic:'Microphone',save:'Screen & clipboard'};
+  const beats = [
+    {at:0, end:13, title:'Checking the cover'},
+    {at:19, end:31, title:'Sending the proof'},
+    {at:32, end:60, title:'After the conversation'}
+  ];
+  const sections = [...root.querySelectorAll('[data-variant]')];
+  const shortlist = new Set();
+  const prettyTime = (s) => '10:' + (s >= 60 ? '15':'14') + ':' + String(s%60).padStart(2,'0');
+  const shortTime = (s) => '+' + s + 's';
+  const get = (id) => events.find(e => e.id === id);
+  const phase = (t) => {
+    if (t >= 60) return 'Recording stopped';
+    if (t >= 56) return 'Waiting for audio · last samples at 10:14:55';
+    const speech = events.filter(e => e.lane !== 'save' && e.at <= t);
+    if (speech.some(e => e.end >= t)) return 'Listening · speech coming in';
+    const last = Math.max(0, ...speech.map(e => e.end));
+    return 'Listening · ' + (t-last) + 's since the last words · ' + (t >= 36 && t < 48 ? 'sound on system audio' : 'quiet inputs');
+  };
+  function poster(which) {
+    const canvas = document.createElement('canvas');
+    canvas.width=640; canvas.height=380;
+    const g=canvas.getContext('2d');
+    if (which==='cover') {
+      g.fillStyle='#f1ead7';g.fillRect(0,0,640,380);
+      g.fillStyle='#294a3d';g.fillRect(402,0,238,380);
+      g.strokeStyle='#9daf84';g.lineWidth=2;
+      for(let i=0;i<17;i++) {
+        g.beginPath(); for(let x=402;x<=640;x+=2) {
+          const y=66+i*15+Math.sin(x/37+i*.16)*21+Math.cos(x/25)*8;
+          if(x===402)g.moveTo(x,y);else g.lineTo(x,y);
+        } g.stroke();
+      }
+      g.fillStyle='#26392b';g.font='18px system-ui';g.fillText('PRINT STUDIO  /  COVER PROOF',32,45);
+      g.font='64px Georgia';g.fillText('Field Notes',28,174);g.font='italic 32px Georgia';g.fillText('Autumn edition',31,220);
+      g.strokeStyle='#9a9b87';g.beginPath();g.moveTo(32,297);g.lineTo(366,297);g.stroke();
+      g.font='17px system-ui';g.fillText('A5  /  UNCOATED',32,336);
+    } else {
+      g.fillStyle='#f3cd87';g.fillRect(0,0,640,380);g.fillStyle='#273b36';g.fillRect(0,0,640,56);
+      g.fillStyle='#ffefd0';g.font='20px system-ui';g.fillText('PRINT ROOM     /     PRODUCTION SLIP',27,36);
+      g.fillStyle='#533c22';g.font='24px system-ui';g.fillText('PRINT PROOF',30,127);
+      g.font='bold 86px Georgia';g.fillText('Due Friday',25,234);
+      g.lineWidth=2;g.strokeStyle='#755733';g.strokeRect(29,287,29,28);g.font='22px system-ui';g.fillText('Approve before sending to press',77,311);
+    }
+    return canvas.toDataURL('image/png');
+  }
+  const pictures={cover:poster('cover'),card:poster('card')};
+  const esc = (s) => String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+  function attachment(e) {
+    const icon=e.asset ? '<img alt="" src="'+pictures[e.asset]+'">' : '<span class="db-glyph" aria-hidden="true">▤</span>';
+    return '<button class="attachment" type="button" data-original="'+e.id+'" aria-label="Open original '+e.name.toLowerCase()+' at '+prettyTime(e.at)+'">'+icon+'</button>';
+  }
+  function entry(e,extra) {
+    return '<div class="db-entry '+e.lane+' '+(extra||'')+'" data-entry="'+e.id+'"><div class="db-by">'+
+      esc(e.name||labels[e.lane])+' <span class="db-time">'+prettyTime(e.at)+(e.end>e.at?' · '+(e.end-e.at)+'s':'')+'</span></div><p>'+esc(e.text)+
+      (e.lane==='save'?attachment(e):'')+'</p></div>';
+  }
+  const list = (ev, extra) => ev.map(e=>entry(e,extra)).join('');
+  const capture = (e) => e.lane==='save';
+  const words = (e) => !capture(e);
+  function beatEvents(b, t) { return events.filter(e => e.at>=b.at && e.at<=b.end && e.at<=t); }
+  function near(e, at) { return capture(e) ? e.at===at : e.at<=at && e.end>=at; }
+  const small = (s) => '<span class="micro">'+esc(s)+'</span>';
+  const timeTag = (s) => '<span class="db-time">'+prettyTime(s)+'</span>';
+  function voiceAndCaptures(ev) {
+    return '<div class="cols"><div class="column"><h3>Conversation</h3>'+list(ev.filter(words))+'</div><div class="column"><h3>Screen & clipboard</h3>'+
+      (list(ev.filter(capture))||small('No captures in this moment'))+'</div></div>';
+  }
+  function renderScene(name, s) {
+    const ev=events.filter(e=>e.at<=s.time);
+    const available=beats.filter(b=>b.at<=s.time);
+    if (name==='Margin notes') return available.map(b=>{
+      const items=beatEvents(b,s.time);
+      if(!items.length)return '';
+      return '<div class="db-row margin-row"><span class="db-time">'+shortTime(b.at)+'</span><div>'+list(items.filter(words))+'</div><aside class="margin-captures">'+list(items.filter(capture))+'</aside></div>';
+    }).join('');
+    if(name==='Track mixer') {
+      const selected=ev.find(e=>e.id===s.selected)||ev[0];
+      const tracks=['mic','sys','save'].map(lane=>'<div class="rail"><b class="db-label">'+labels[lane]+'</b><div class="track '+lane+'">'+
+        ev.filter(e=>e.lane===lane).map(e=>'<button type="button" data-select="'+e.id+'" aria-pressed="'+(selected.id===e.id)+'" aria-label="'+esc((e.name||labels[lane])+' at '+prettyTime(e.at))+'" style="left:'+e.at/60*100+'%;width:'+Math.max(3,(Math.min(e.end,s.time)-e.at)/60*100)+'%">'+(capture(e)?'•':'')+'</button>').join('')+'</div></div>').join('');
+      return '<div class="track-ticks micro"><span>0s</span><span>15s</span><span>30s</span><span>45s</span><span>60s</span></div>'+tracks+
+        '<div class="navline">'+ev.filter(capture).map(e=>'<button type="button" class="compact-action" data-select="'+e.id+'">'+esc(e.name)+'</button>').join('')+'</div><div class="readout">'+entry(selected)+small('At the same time')+list(ev.filter(e=>e.id!==selected.id && (capture(selected)?near(e,selected.at):e.at>=selected.at&&e.at<=selected.end)))+'</div>';
+    }
+    if(name==='Moment cards') return available.map((b,i)=>{
+      const items=beatEvents(b,s.time);
+      return '<details class="mom" data-moment="'+i+'" '+(s.open.has(i)?'open':'')+'><summary>'+esc(b.title)+' <small>'+prettyTime(b.at)+'</small></summary>'+
+        (items.length?voiceAndCaptures(items):small(phase(s.time)))+'</details>';
+    }).join('');
+    if(name==='Split desk') {
+      const selected=ev.find(e=>e.id===s.selected&&capture(e));
+      return '<div class="cols"><section class="column"><h3>Conversation</h3>'+ev.filter(words).map(e=>entry(e,selected&&near(e,selected.at)?'linked':'')).join('')+'</section><section class="column"><h3>Capture desk</h3>'+
+        ev.filter(capture).map(e=>entry(e)+'<button type="button" class="compact-action" data-select="'+e.id+'" aria-pressed="'+(e===selected)+'">Highlight words at '+prettyTime(e.at)+'</button>').join('')+'</section></div>';
+    }
+    if(name==='Conversation')return available.map(b=>{
+      const items=beatEvents(b,s.time);
+      return items.length?'<div class="chat-beat">'+timeTag(b.at)+items.map(e=>capture(e)?'<aside class="chat-context">'+entry(e)+'</aside>':entry(e,'bubble')).join('')+'</div>':'';
+    }).join('');
+    if(name==='Contact sheet') {
+      const cards=ev.filter(capture);
+      return '<div class="gallery">'+cards.map(e=>'<article class="tile"><button class="thumb" type="button" data-original="'+e.id+'" aria-label="Open original '+e.name.toLowerCase()+'">'+
+        (e.asset?'<img alt="" src="'+pictures[e.asset]+'">':'<span class="paste-paper">“Uncoated, warm white.”</span>')+'</button>'+entry(e)+
+        '<button class="compact-action" type="button" data-select="'+e.id+'" aria-pressed="'+(s.selected===e.id)+'">Read conversation</button></article>').join('')+'</div><div class="readout">'+
+        small(s.selected&&cards.some(e=>e.id===s.selected)?'Spoken at '+prettyTime(get(s.selected).at):'Conversation')+
+        list(ev.filter(words).filter(e=>!cards.some(c=>c.id===s.selected)||near(e,get(s.selected).at)))+'</div>';
+    }
+    if(name==='Time lens') {
+      const items=ev.filter(e=>near(e,s.time));
+      return '<div class="navline"><button type="button" data-jump="6">Cover appears</button><button type="button" data-jump="22">Voices overlap</button><button type="button" data-jump="45">Music only</button><button type="button" data-jump="51">Quiet</button></div>'+
+        '<div class="readout"><div class="db-time">At '+prettyTime(s.time)+'</div>'+
+        (items.length?voiceAndCaptures(items):'<p>'+esc(phase(s.time))+'</p>')+'</div>';
+    }
+    if(name==='Reading copy') return '<div class="reading">'+available.map(b=>{
+      const items=beatEvents(b,s.time); if(!items.length)return '';
+      return '<div class="mom">'+timeTag(b.at)+list(items.filter(words))+
+        (items.some(capture)?'<aside>'+list(items.filter(capture))+'</aside>':'')+'</div>';
+    }).join('')+'</div>';
+    if(name==='Moment index') {
+      const i=Math.min(s.beat,available.length-1);
+      const b=available[i];const items=beatEvents(b,s.time);
+      return '<div class="index"><nav aria-label="Moments">'+available.map((moment,j)=>'<button type="button" data-beat="'+j+'" aria-pressed="'+(i===j)+'"><small class="db-time">'+prettyTime(moment.at)+'</small><br>'+esc(moment.title)+'</button>').join('')+'</nav>'+
+        '<div class="column"><h3>'+esc(b.title)+'</h3>'+(items.length?list(items):small(phase(s.time)))+'</div></div>';
+    }
+    return '<div class="stack">'+['mic','sys','save'].map(lane=>{
+      const items=ev.filter(e=>e.lane===lane);
+      const expanded=s.stack.has(lane);
+      return '<section><h3>'+labels[lane]+'</h3>'+(items.length?list(expanded?items:items.slice(-1)):small('Nothing yet'))+
+        (items.length>1?'<button class="compact-action" type="button" data-stack="'+lane+'" aria-pressed="'+expanded+'">'+(expanded?'Show latest':'Show all '+items.length)+'</button>':'')+'</section>';
+    }).join('')+'</div>';
+  }
+
+  function savePicks() {
+    if(window.openai?.setWidgetState) window.openai.setWidgetState({modelContent:{daybookViews:[...shortlist]}}).catch(()=>{});
+    updatePicks();
+  }
+  function updatePicks() {
+    for(const btn of root.querySelectorAll('[data-pick]')) {
+      const picked=shortlist.has(btn.closest('[data-variant]').dataset.variant);
+      btn.textContent=picked?'★ Shortlisted':'☆ Shortlist'; btn.setAttribute('aria-pressed',String(picked));
+    }
+  }
+  function restorePicks(state) {
+    const picks=state?.modelContent?.daybookViews;
+    if(Array.isArray(picks)){shortlist.clear();for(const name of picks) if(sections.some(s=>s.dataset.variant===name))shortlist.add(name);updatePicks();}
+  }
+  for (const section of sections) {
+    const name=section.dataset.variant;
+    const s={time:name==='Time lens'?22:51,selected:name==='Track mixer'||name==='Split desk'?'cover':null,beat:0,open:new Set([0,1]),stack:new Set(),interval:null};
+    section.setAttribute('aria-label',name+' transcript');
+    section.innerHTML='<div class="db-window"><header class="db-bar"><span class="brand">Daybook</span><small>Sample recording · 10:14–10:15</small></header>'+
+      '<div class="db-heading"><h2>'+esc(name)+'</h2><button type="button" class="compact-action" data-pick aria-pressed="false">☆ Shortlist</button></div>'+
+      '<div class="db-scene"></div><div class="db-listening"><span class="db-light"></span><span class="status-line"></span></div>'+
+      '<footer class="db-foot"><button type="button" data-play>Play sample</button><label><span class="db-label">Time</span><input type="range" min="0" max="60" value="51" aria-label="Sample time"></label><output class="db-time">10:14:51</output></footer>'+
+      '<section class="db-original" role="dialog" aria-label="Original capture" hidden></section></div>';
+    const scene=section.querySelector('.db-scene'), original=section.querySelector('.db-original');
+    const slider=section.querySelector('input'), play=section.querySelector('[data-play]');
+    let originButton, sceneVersion='';
+    function redraw(force=false) {
+      const signature=events.filter(e=>e.at<=s.time).length+':'+beats.filter(b=>b.at<=s.time).length;
+      if(force||signature!==sceneVersion||name==='Time lens'||name==='Track mixer'||name==='Moment index'&&s.beat===2||name==='Moment cards'&&s.open.has(2)) {
+        sceneVersion=signature; scene.innerHTML=renderScene(name,s);
+      }
+      slider.value=s.time; slider.setAttribute('aria-valuetext',prettyTime(s.time));
+      section.querySelector('output').textContent=prettyTime(s.time);
+      section.querySelector('.status-line').textContent=phase(s.time);
+      section.querySelector('.db-light').classList.toggle('off',s.time>=56);
+    }
+    function stop(){if(s.interval!==null)clearInterval(s.interval);s.interval=null;play.textContent=s.time===60?'Replay sample':'Play sample';}
+    function move(t){s.time=Math.max(0,Math.min(60,t));redraw();if(s.time===60)stop();}
+    function closeOriginal(){original.hidden=true;original.replaceChildren();setBackground(false);if(originButton?.isConnected)originButton.focus();}
+    function setBackground(inert) {
+      for(const el of section.querySelector('.db-window').children) if(el!==original)el.inert=inert;
+    }
+    function showOriginal(e,button) {
+      stop();originButton=button;
+      original.innerHTML='<div class="original-head"><h3>'+esc(e.name)+'</h3><button type="button" data-close>Back to transcript</button></div><small>'+prettyTime(e.at)+'</small>'+
+        (e.asset?'<img src="'+pictures[e.asset]+'" alt="'+esc(e.text)+'"><details><summary>Text from image</summary><p>'+esc(e.text)+'</p></details>':'<blockquote>'+esc(e.text)+'</blockquote>');
+      original.hidden=false;setBackground(true);original.querySelector('button').focus();
+    }
+    section.addEventListener('click',e=>{
+      const b=e.target.closest('button');if(!b)return;
+      if(b.hasAttribute('data-original'))showOriginal(get(b.dataset.original),b);
+      else if(b.hasAttribute('data-close'))closeOriginal();
+      else if(b.hasAttribute('data-pick')){shortlist.has(name)?shortlist.delete(name):shortlist.add(name);savePicks();}
+      else if(b.hasAttribute('data-play')) {
+        if(s.interval!==null){stop();return;}if(s.time===60)move(0);
+        play.textContent='Pause sample';s.interval=setInterval(()=>move(s.time+1),1000);
+      } else if(b.hasAttribute('data-jump')){stop();move(Number(b.dataset.jump));}
+      else if(b.hasAttribute('data-select')){s.selected=b.dataset.select;redraw(true);scene.querySelector('[data-select="'+s.selected+'"]')?.focus();}
+      else if(b.hasAttribute('data-beat')){s.beat=Number(b.dataset.beat);redraw(true);scene.querySelector('[data-beat="'+s.beat+'"]')?.focus();}
+      else if(b.hasAttribute('data-stack')){const l=b.dataset.stack;s.stack.has(l)?s.stack.delete(l):s.stack.add(l);redraw(true);scene.querySelector('[data-stack="'+l+'"]')?.focus();}
+    });
+    section.addEventListener('toggle',e=>{
+      if(e.target.matches('details[data-moment]') && e.target.isConnected){
+        const i=Number(e.target.dataset.moment);e.target.open?s.open.add(i):s.open.delete(i);
+      }
+    },true);
+    section.addEventListener('keydown',e=>{if(e.key==='Escape'&&!original.hidden){e.preventDefault();closeOriginal();}});
+    slider.addEventListener('input',()=>{stop();move(Number(slider.value));});
+    new MutationObserver(()=>{if(section.hidden){stop();if(!original.hidden){original.hidden=true;setBackground(false);}}}).observe(section,{attributes:true,attributeFilter:['hidden']});
+    redraw();
+  }
+  restorePicks(window.openai?.widgetState);
+  window.addEventListener('openai:set_globals',e=>restorePicks(e.detail?.globals?.widgetState));
+})();
+</script>
+<script>
+(() => {
+  const variants=[...document.querySelectorAll('.viz-carousel > [data-variant]')];
+  const picker=document.getElementById('study');
+  for (const [i,variant] of variants.entries()) picker.add(new Option(variant.dataset.variant,String(i)));
+  function show(i) {
+    const index=(i+variants.length)%variants.length;
+    variants.forEach((v,j)=>v.hidden=j!==index);
+    picker.value=String(index);
+    document.getElementById('count').textContent=(index+1)+' / '+variants.length;
+  }
+  picker.addEventListener('change',()=>show(Number(picker.value)));
+  document.getElementById('prev').addEventListener('click',()=>show(Number(picker.value)-1));
+  document.getElementById('next').addEventListener('click',()=>show(Number(picker.value)+1));
+  show(0);
+})();
+</script>
+</main></body>
+</html>

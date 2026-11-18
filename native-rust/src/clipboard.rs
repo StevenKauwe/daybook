@@ -3,6 +3,8 @@ use crate::{ffi::*, screen};
 use objc2::{msg_send, rc::autoreleasepool, runtime::AnyObject};
 use serde_json::{Value, json};
 use std::{path::Path, ptr};
+#[path = "../../src/clipboard_image_types.rs"]
+mod formats;
 
 const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -99,7 +101,7 @@ unsafe fn read_board(board: *mut AnyObject, path: &Path) -> Result<Value, String
         !types.is_null() && msg_send![types, containsObject:&*string(kind)]
     };
     // A browser can offer both the copied bitmap and its URL. Keep the image in that case.
-    for kind in ["public.png", "public.tiff", "public.jpeg"] {
+    for &kind in formats::BITMAP_TYPES {
         if !offers(kind) {
             continue;
         }
@@ -109,6 +111,36 @@ unsafe fn read_board(board: *mut AnyObject, path: &Path) -> Result<Value, String
                 write_image_data(data, path)?;
             } else {
                 write_png(&decode(data)?, path)?;
+            }
+            return Ok(json!({"kind":"image"}));
+        }
+    }
+    if offers("public.file-url") {
+        let value: Option<objc2::rc::Retained<objc2_foundation::NSString>> =
+            msg_send![board, stringForType:&*string("public.file-url")];
+        if let Some(file) = value.as_deref().and_then(formats::image_file) {
+            use std::io::Read;
+            let input = std::fs::File::open(&file)
+                .map_err(|_| "The copied image file could not be opened")?;
+            if !input
+                .metadata()
+                .is_ok_and(|m| m.is_file() && m.len() <= MAX_IMAGE_BYTES as u64)
+            {
+                return Err("Choose an image file under 64 MiB".into());
+            }
+            let mut bytes = Vec::new();
+            input
+                .take(MAX_IMAGE_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            if bytes.len() > MAX_IMAGE_BYTES {
+                return Err("Image exceeds 64 MiB".into());
+            }
+            let data: Obj = msg_send![class(c"NSData"), dataWithBytes:bytes.as_ptr().cast::<std::ffi::c_void>(), length:bytes.len()];
+            if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+                write_image_data((&*data as *const AnyObject).cast_mut(), path)?;
+            } else {
+                write_png(&decode((&*data as *const AnyObject).cast_mut())?, path)?;
             }
             return Ok(json!({"kind":"image"}));
         }
@@ -152,7 +184,7 @@ unsafe fn read_version(
         if current == version {
             Ok(())
         } else {
-            Err("Clipboard changed. Choose Save Clipboard to save the new item.".into())
+            Err("The clipboard changed. Paste again to save the new item.".into())
         }
     };
     check()?;
@@ -209,7 +241,22 @@ pub unsafe fn self_test(path: &Path) -> Result<Value, String> {
             {
                 return Err("Clipboard image OCR did not round-trip".into());
             }
-            Ok(json!({"result":"PASS isolated clipboard text, link, original PNG and native OCR"}))
+            let _: isize = msg_send![&*board, clearContents];
+            let url = objc2_foundation::NSURL::fileURLWithPath(&string(
+                path.to_str().ok_or("Invalid path")?,
+            ));
+            let address = url.absoluteString().ok_or("Invalid test file URL")?;
+            let _: bool =
+                msg_send![&*board, setString:&*address, forType:&*string("public.file-url")];
+            let copy = path.with_file_name("finder-copy.png");
+            if read_board(board_ptr, &copy)?["kind"] != "image"
+                || std::fs::read(copy).map_err(|e| e.to_string())? != original
+            {
+                return Err("Copied image file did not round-trip".into());
+            }
+            Ok(
+                json!({"result":"PASS isolated clipboard text, link, original PNG, Finder image and native OCR"}),
+            )
         })();
         let _: () = msg_send![&*board, releaseGlobally];
         result

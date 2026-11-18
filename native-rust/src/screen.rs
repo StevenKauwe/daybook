@@ -47,6 +47,17 @@ pub unsafe fn thumbnail(image: &Image) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 pub unsafe fn recognize(image: &Image) -> Result<(String, Vec<Value>), String> {
+    read_image_text(image, true)
+}
+
+pub unsafe fn saved_text(image: &Image) -> Result<String, String> {
+    read_image_text(image, false).map(|(text, _)| text)
+}
+
+unsafe fn read_image_text(
+    image: &Image,
+    with_word_boxes: bool,
+) -> Result<(String, Vec<Value>), String> {
     autoreleasepool(|_| {
         let request = new(c"VNRecognizeTextRequest");
         let _: () = msg_send![&*request,setRecognitionLevel:0usize];
@@ -65,7 +76,12 @@ pub unsafe fn recognize(image: &Image) -> Result<(String, Vec<Value>), String> {
         let count: usize = msg_send![results, count];
         let mut text_out = String::new();
         let mut words = Vec::new();
-        for i in 0..count.min(200) {
+        let lines = if with_word_boxes {
+            count.min(200)
+        } else {
+            count
+        };
+        for i in 0..lines {
             let observation: *mut AnyObject = msg_send![results,objectAtIndex:i];
             let candidates: *mut AnyObject = msg_send![observation,topCandidates:1usize];
             let count: usize = msg_send![candidates, count];
@@ -78,6 +94,12 @@ pub unsafe fn recognize(image: &Image) -> Result<(String, Vec<Value>), String> {
             let confidence: f32 = msg_send![candidate, confidence];
             text_out.push_str(&line);
             text_out.push('\n');
+            if !with_word_boxes {
+                if text_out.len() > 512 * 1024 {
+                    return Err("Recognized text exceeds 512 KiB".into());
+                }
+                continue;
+            }
             let mut cursor = 0;
             for word in line.split_whitespace() {
                 if words.len() >= 1000 {
@@ -102,7 +124,7 @@ pub unsafe fn recognize(image: &Image) -> Result<(String, Vec<Value>), String> {
                 words.push(json!({"text":word.chars().take(128).collect::<String>(),"x":r.origin.x,"y":r.origin.y,"width":r.size.width,"height":r.size.height,"confidence":confidence}));
             }
         }
-        while text_out.len() > 16000 {
+        while with_word_boxes && text_out.len() > 16000 {
             text_out.pop();
         }
         Ok((text_out, words))
@@ -141,12 +163,16 @@ pub unsafe fn save_jpeg(image: &Image, root: &Path) -> Result<String, String> {
     })
 }
 pub unsafe fn synthetic_image() -> Result<Image, String> {
+    drawn_image(800, 180, 1)
+}
+
+pub unsafe fn drawn_image(width: usize, height: usize, lines: usize) -> Result<Image, String> {
     autoreleasepool(|_| {
         let space = Cf(CGColorSpaceCreateDeviceRGB());
         let ctx = Cf(CGBitmapContextCreate(
             ptr::null_mut(),
-            800,
-            180,
+            width,
+            height,
             8,
             0,
             space.0,
@@ -161,20 +187,39 @@ pub unsafe fn synthetic_image() -> Result<Image, String> {
             Rect {
                 origin: Point::default(),
                 size: Size {
-                    width: 800.0,
-                    height: 180.0,
+                    width: width as f64,
+                    height: height as f64,
                 },
             },
         );
         let graphics: Obj = msg_send![class(c"NSGraphicsContext"),graphicsContextWithCGContext:ctx.0.cast::<CGContextOpaque>(), flipped:false];
         let _: () = msg_send![class(c"NSGraphicsContext"), saveGraphicsState];
         let _: () = msg_send![class(c"NSGraphicsContext"),setCurrentContext:&*graphics];
-        let font: Obj = msg_send![class(c"NSFont"),systemFontOfSize:40.0f64];
+        let font_size = if width == 800 && height == 180 {
+            40.0
+        } else {
+            width as f64 / 70.0
+        };
+        let font: Obj = msg_send![class(c"NSFont"),systemFontOfSize:font_size];
         let color: Obj = msg_send![class(c"NSColor"), blackColor];
         let attrs = new(c"NSMutableDictionary");
         let _: () = msg_send![&*attrs,setObject:&*font, forKey:&*string("NSFont")];
         let _: () = msg_send![&*attrs,setObject:&*color, forKey:&*string("NSColor")];
-        let _: () = msg_send![&*string("Daybook synthetic decision"),drawAtPoint:Point{x:30.0,y:70.0}, withAttributes:&*attrs];
+        for row in 0..lines {
+            let label = if width == 800 && height == 180 {
+                "Daybook synthetic decision".to_owned()
+            } else {
+                format!(
+                    "Item {:02}   Review the project notes and confirm the next meeting date.",
+                    row + 1
+                )
+            };
+            let point = Point {
+                x: width as f64 * 0.04,
+                y: height as f64 * (0.9 - (row as f64 / 23.0)) - font_size,
+            };
+            let _: () = msg_send![&*string(&label),drawAtPoint:point, withAttributes:&*attrs];
+        }
         let _: () = msg_send![class(c"NSGraphicsContext"), restoreGraphicsState];
         let image = CGBitmapContextCreateImage(ctx.0);
         if image.is_null() {

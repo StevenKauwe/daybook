@@ -18,6 +18,7 @@ impl Store {
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
  CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS observations(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,end_at INTEGER NOT NULL,kind TEXT NOT NULL,source TEXT NOT NULL,text TEXT NOT NULL,details TEXT NOT NULL,source_id INTEGER);
+ CREATE TABLE IF NOT EXISTS saved_images(observation_id INTEGER PRIMARY KEY REFERENCES observations(id) ON DELETE CASCADE,png BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS sources(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,end_at INTEGER NOT NULL,track TEXT NOT NULL,path TEXT UNIQUE NOT NULL,status TEXT NOT NULL DEFAULT 'pending',error TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0);
  CREATE TABLE IF NOT EXISTS jobs(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,lo INTEGER NOT NULL,hi INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',text TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',retry_at INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL,UNIQUE(kind,lo,hi));
  CREATE TABLE IF NOT EXISTS provider_activity(id INTEGER PRIMARY KEY,started INTEGER NOT NULL,role TEXT NOT NULL,model TEXT NOT NULL,origin TEXT NOT NULL,is_local INTEGER NOT NULL,status TEXT NOT NULL,elapsed_ms INTEGER,input_bytes INTEGER NOT NULL,output_bytes INTEGER,reserved_units INTEGER NOT NULL,prompt_tokens INTEGER,completion_tokens INTEGER,estimated_usd REAL);
@@ -29,6 +30,7 @@ impl Store {
  CREATE TABLE IF NOT EXISTS export_dirty(day TEXT PRIMARY KEY);
  CREATE TABLE IF NOT EXISTS job_days(job_id INTEGER NOT NULL REFERENCES jobs(id),day TEXT NOT NULL,PRIMARY KEY(job_id,day));
  CREATE INDEX IF NOT EXISTS obs_at ON observations(at); CREATE INDEX IF NOT EXISTS source_status ON sources(status,id);
+ CREATE INDEX IF NOT EXISTS obs_pending_ocr ON observations(id) WHERE kind='screen' AND json_extract(details,'$.ocr_status')='pending';
  CREATE INDEX IF NOT EXISTS obs_live ON observations(source,id DESC) WHERE kind IN ('preview','transcript');
  CREATE INDEX IF NOT EXISTS obs_transcript_at ON observations(at,id) WHERE kind IN ('preview','transcript');
  CREATE INDEX IF NOT EXISTS source_speech_gate ON source_metadata(json_extract(details,'$.speech_gate'));")?;
@@ -257,7 +259,7 @@ impl Store {
         let sql = if kind == "meta" {
             "SELECT id,length(CAST(text AS BLOB)),'meta' FROM jobs WHERE kind='incremental' AND status='done' AND id>=?1 ORDER BY id LIMIT 30"
         } else {
-            "SELECT id,length(CAST(text AS BLOB)),date(at,'unixepoch','localtime') FROM observations WHERE kind IN ('transcript','screen','note') AND id>=?1 AND id<coalesce((SELECT min(id) FROM observations WHERE kind='preview'),9223372036854775807) ORDER BY id LIMIT 80"
+            "SELECT id,length(CAST(text AS BLOB)),date(at,'unixepoch','localtime') FROM observations WHERE kind IN ('transcript','screen','note') AND id>=?1 AND id<min(coalesce((SELECT min(id) FROM observations WHERE kind='preview'),9223372036854775807),coalesce((SELECT min(id) FROM observations WHERE kind='screen' AND json_extract(details,'$.ocr_status')='pending'),9223372036854775807)) ORDER BY id LIMIT 80"
         };
         let mut q = self.db.prepare(sql)?;
         let mut bytes = 0;

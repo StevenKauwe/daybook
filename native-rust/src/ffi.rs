@@ -164,6 +164,25 @@ unsafe extern "C" {}
 unsafe extern "C" {}
 #[link(name = "Vision", kind = "framework")]
 unsafe extern "C" {}
+#[link(name = "ImageIO", kind = "framework")]
+unsafe extern "C" {
+    pub fn CGImageSourceCreateWithData(data: *const c_void, options: *const c_void) -> *mut c_void;
+    pub fn CGImageSourceCopyPropertiesAtIndex(
+        source: *const c_void,
+        index: usize,
+        options: *const c_void,
+    ) -> *mut c_void;
+    pub fn CGImageSourceCreateThumbnailAtIndex(
+        source: *const c_void,
+        index: usize,
+        options: *const c_void,
+    ) -> *mut c_void;
+    pub static kCGImagePropertyPixelWidth: *mut AnyObject;
+    pub static kCGImagePropertyPixelHeight: *mut AnyObject;
+    pub static kCGImageSourceCreateThumbnailFromImageAlways: *mut AnyObject;
+    pub static kCGImageSourceCreateThumbnailWithTransform: *mut AnyObject;
+    pub static kCGImageSourceThumbnailMaxPixelSize: *mut AnyObject;
+}
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     pub fn CFRetain(p: *const c_void) -> *const c_void;

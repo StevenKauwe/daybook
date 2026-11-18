@@ -2,9 +2,11 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 mod audio;
 mod capture_queue;
+mod clipboard;
 mod ffi;
 mod meters;
 mod mic_meter;
+mod ocr_bench;
 mod screen;
 mod state;
 use block2::RcBlock;
@@ -246,6 +248,8 @@ struct App {
     delegate: Obj,
     app: Obj,
     status_item: Obj,
+    save_receipt: Obj,
+    save_flash: Option<(String, Instant)>,
     stream: Option<Obj>,
     engine: Option<Obj>,
     input: Option<Obj>,
@@ -273,8 +277,13 @@ impl App {
         let bar: Obj = msg_send![class(c"NSStatusBar"), systemStatusBar];
         let status_item: Obj = msg_send![&*bar,statusItemWithLength:-1.0f64];
         let menu = new(c"NSMenu");
+        let save_receipt = new(c"NSMenuItem");
+        let _: () = msg_send![&*save_receipt, setHidden:true];
+        let _: () = msg_send![&*save_receipt, setEnabled:false];
         for (title, command) in [
             ("Open Daybook controls", "open"),
+            ("Save Clipboard to Daybook", "save_clipboard"),
+            ("Save Screenshot…", "save_screenshot"),
             ("Start recording now", "start"),
             ("Enable workday auto", "arm"),
             ("Stop", "stop"),
@@ -287,6 +296,11 @@ impl App {
             let _: () = msg_send![&*item,setTarget:&*delegate];
             let _: () = msg_send![&*item,setRepresentedObject:&*string(command)];
             let _: () = msg_send![&*menu,addItem:&*item];
+            if command == "save_screenshot" {
+                let _: () = msg_send![&*menu, addItem:&*save_receipt];
+                let divider: Obj = msg_send![class(c"NSMenuItem"), separatorItem];
+                let _: () = msg_send![&*menu, addItem:&*divider];
+            }
         }
         let _: () = msg_send![&*status_item,setMenu:&*menu];
         let workspace: Obj = msg_send![class(c"NSWorkspace"), sharedWorkspace];
@@ -328,6 +342,8 @@ impl App {
             delegate,
             app,
             status_item,
+            save_receipt,
+            save_flash: None,
             stream: None,
             engine: None,
             input: None,
@@ -345,9 +361,29 @@ impl App {
         permission_status();
         Ok(this)
     }
+    unsafe fn refresh_title(&self) {
+        let name = if self.active || self.starting {
+            "● Daybook"
+        } else {
+            "○ Daybook"
+        };
+        let title = self
+            .save_flash
+            .as_ref()
+            .filter(|(_, until)| Instant::now() < *until)
+            .map_or_else(|| name.to_owned(), |(badge, _)| format!("{name} {badge}"));
+        let button: *mut AnyObject = msg_send![&*self.status_item, button];
+        let _: () = msg_send![button,setTitle:&*string(&title)];
+    }
+    unsafe fn save_feedback(&mut self, message: &str, badge: &str) {
+        let _: () = msg_send![&*self.save_receipt, setTitle:&*string(message)];
+        let _: () = msg_send![&*self.save_receipt, setHidden:false];
+        self.save_flash = Some((badge.into(), Instant::now() + Duration::from_secs(4)));
+        self.refresh_title();
+    }
     unsafe fn status(&self, state: &str) {
         let button: *mut AnyObject = msg_send![&*self.status_item, button];
-        let _: () = msg_send![button,setTitle:&*string(if self.active||self.starting{"● Daybook"}else{"○ Daybook"})];
+        self.refresh_title();
         let _: () = msg_send![button,setToolTip:&*string(&format!("Daybook: {state}"))];
         emit(
             json!({"type":"state","state":state,"active":self.active,"armed":self.gate.armed,"starting":self.starting,"stopping":self.stopping,"epoch":self.epoch}),
@@ -415,6 +451,15 @@ impl App {
         permission_status();
     }
     unsafe fn command(&mut self, command: &str) {
+        if let Some(message) = command.strip_prefix("save_feedback ") {
+            let badge = if message.ends_with(" saved") || message.starts_with("Image saved") {
+                "✓"
+            } else {
+                "·"
+            };
+            self.save_feedback(message, badge);
+            return;
+        }
         PERSIST_AUDIO.store(self.settings.audio_storage == "recovery", Ordering::Release);
         if self.update_blocked && ["start", "arm"].contains(&command) {
             self.status("update in progress; recording remains stopped");
@@ -431,6 +476,38 @@ impl App {
                 self.status("stopped");
             }
             "open" => self.open(),
+            "save_clipboard" | "save_screenshot" => {
+                if self.synthetic
+                    || self.update_blocked
+                    || self.gate.blocked()
+                    || self.quit_requested
+                {
+                    self.save_feedback("Saving is unavailable during this session", "·");
+                    return;
+                }
+                let screen = command == "save_screenshot";
+                if screen && !CGPreflightScreenCaptureAccess() {
+                    self.save_feedback(
+                        "Allow Screen Recording in Daybook settings, then try again",
+                        "·",
+                    );
+                    self.command("permission_screen");
+                    return;
+                }
+                self.save_feedback(
+                    if screen {
+                        "Select an area or window"
+                    } else {
+                        "Saving clipboard…"
+                    },
+                    "…",
+                );
+                emit(if screen {
+                    json!({"type":"save_request","source":"screenshot"})
+                } else {
+                    json!({"type":"save_request","source":"clipboard","version":clipboard::version()})
+                });
+            }
             "reload" => {
                 if self.gate.armed || self.active {
                     emit(json!({"type":"error","message":"Stop before reloading native settings"}));
@@ -687,6 +764,14 @@ impl App {
         self.status(reason);
     }
     unsafe fn tick(&mut self) {
+        if self
+            .save_flash
+            .as_ref()
+            .is_some_and(|(_, until)| Instant::now() >= *until)
+        {
+            self.save_flash = None;
+            self.refresh_title();
+        }
         PERSIST_AUDIO.store(self.settings.audio_storage == "recovery", Ordering::Release);
         let second = stamp() as u64;
         if second.saturating_sub(PERMISSION_CHECK_AT.load(Ordering::Relaxed)) >= 5 {
@@ -787,6 +872,9 @@ impl App {
                 };
                 if let Some(e) = e {
                     self.gate.apply(e);
+                    if self.gate.blocked() {
+                        emit(json!({"type":"save_cancel"}));
+                    }
                     if self.gate.blocked() && (self.active || self.starting || self.gate.armed) {
                         self.stop("suspended")
                     } else {
@@ -953,6 +1041,32 @@ fn main() {
 }
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("--benchmark-ocr") => {
+            emit(ocr_bench::run(&args[2..])?);
+            return Ok(());
+        }
+        Some("--make-ocr-fixture") => return ocr_bench::fixture(&args[2..]),
+        Some(mode @ ("--read-clipboard" | "--ocr-file" | "--self-test-clipboard")) => {
+            let path = std::path::Path::new(args.get(2).ok_or("Image path required")?);
+            let result = unsafe {
+                match mode {
+                    "--read-clipboard" => {
+                        let version = args
+                            .get(3)
+                            .and_then(|arg| arg.parse().ok())
+                            .ok_or("Clipboard version required")?;
+                        clipboard::read(path, version)
+                    }
+                    "--ocr-file" => clipboard::ocr_file(path),
+                    _ => clipboard::self_test(path),
+                }
+            };
+            emit(result?);
+            return Ok(());
+        }
+        _ => {}
+    }
     if args.iter().any(|a| a == "--self-test-backpressure") {
         return test_backpressure();
     }
@@ -1046,7 +1160,7 @@ fn run() -> Result<(), String> {
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {
             match line {
-                Ok(line) if line.len() < 100 => {
+                Ok(line) if line.len() < 1024 => {
                     if tx.send(Event::Command(line)).is_err() {
                         return;
                     }

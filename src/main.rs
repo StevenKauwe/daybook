@@ -5,6 +5,7 @@ mod provider;
 mod reading;
 mod realtime;
 mod recovery;
+mod saved;
 mod speech_file;
 mod store;
 mod streaming;
@@ -50,6 +51,17 @@ impl Bridge {
         let _ = self.child.wait();
     }
 }
+fn native_helper() -> Result<PathBuf> {
+    let sibling = std::env::current_exe()?
+        .parent()
+        .ok_or("Missing executable folder")?
+        .join("daybook-native");
+    Ok(if sibling.exists() {
+        sibling
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("native/daybook-native")
+    })
+}
 fn bridge(
     root: &Path,
     url: &str,
@@ -58,14 +70,7 @@ fn bridge(
     show_ui: bool,
     meters: realtime::Shared,
 ) -> Result<Bridge> {
-    let exe = std::env::current_exe()?;
-    let sibling = exe.parent().unwrap().join("daybook-native");
-    let native = if sibling.exists() {
-        sibling
-    } else {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("native/daybook-native")
-    };
-    let mut child = Command::new(native)
+    let mut child = Command::new(native_helper()?)
         .args([
             root.to_str().ok_or("invalid data path")?,
             root.join("config.json").to_str().unwrap(),
@@ -406,7 +411,21 @@ fn run() -> Result<()> {
     let mut last_clean = Instant::now();
     let mut last_compress = Instant::now();
     let mut update_blocked = false;
+    let mut saves = saved::Saves::new(&s, native_helper()?)?;
     while !EXIT.load(Ordering::Relaxed) {
+        let disk_limit = c.disk_limit_mb * 1024 * 1024;
+        if let Some(result) = saves.poll(&s, disk_limit) {
+            let message = result.unwrap_or_else(|e| format!("Save error · {e}"));
+            let message: String = message
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(160)
+                .collect();
+            s.state("notice", &message)?;
+            if let Some(b) = &mut native {
+                b.send(&format!("save_feedback {message}"));
+            }
+        }
         let blocked = update::busy(&root);
         if blocked != update_blocked {
             if let Some(b) = &mut native {
@@ -426,6 +445,30 @@ fn run() -> Result<()> {
             if v["type"] == "quit" || v["type"] == "bridge_exit" {
                 EXIT.store(true, Ordering::Relaxed);
                 break;
+            }
+            if v["type"] == "save_request" {
+                if !synthetic && !blocked {
+                    let action = match v["source"].as_str() {
+                        Some("clipboard") => match v["version"].as_i64() {
+                            Some(version) => saved::Action::Clipboard(version),
+                            None => continue,
+                        },
+                        Some("screenshot") => saved::Action::Screenshot,
+                        _ => continue,
+                    };
+                    if let Err(e) = saves.start(&s, action, disk_limit) {
+                        if let Some(b) = &mut native {
+                            b.send(&format!("save_feedback {e}"));
+                        }
+                    }
+                } else if let Some(b) = &mut native {
+                    b.send("save_feedback Saving is unavailable during this session");
+                }
+                continue;
+            }
+            if v["type"] == "save_cancel" {
+                saves.cancel();
+                continue;
             }
             if let Err(e) = ingest(&s, &c, &v, &inbox) {
                 s.event(&format!("Capture ingestion error: {e}"))?;
@@ -564,6 +607,9 @@ fn run() -> Result<()> {
             let v: Value = serde_json::from_slice(&body)?;
             match endpoint {
                 "/update" => {
+                    if saves.busy() {
+                        return Err("Finish or cancel the current save before updating".into());
+                    }
                     if let Some(draft) = v["draft"].as_str() {
                         if draft.len() > 16000 {
                             return Err("Draft exceeds 16,000 bytes".into());
@@ -582,22 +628,39 @@ fn run() -> Result<()> {
                     s.export()?;
                     return Ok(json!({"day":day,"text":std::fs::read_to_string(root.join(format!("{day}.txt")))?}).to_string());
                 }
+                "/retry_saved_ocr" => {
+                    let id = v["id"].as_i64().ok_or("Observation ID required")?;
+                    let item = inspect::inspect(&s, &json!({"kind":"observation","id":id}))?;
+                    if item["details"]["saved_image"] != true
+                        || item["details"]["ocr_status"] != "failed"
+                    {
+                        return Err("Choose a saved image with a recognition error".into());
+                    }
+                    if update::busy(&root) {
+                        return Err("An app update is in progress".into());
+                    }
+                    saves.start(&s, saved::Action::ReadText(id), disk_limit)?;
+                }
                 "/reveal_image" => {
                     let id = v["id"].as_i64().ok_or("observation id required")?;
                     let item = inspect::inspect(&s, &json!({"kind":"observation","id":id}))?;
                     if item["image_retained"] != true {
                         return Err("Screen image was not retained or has expired".into());
                     }
-                    Command::new("/usr/bin/open")
-                        .arg("-R")
-                        .arg(
-                            root.join(
-                                item["details"]["path"]
-                                    .as_str()
-                                    .ok_or("image path missing")?,
-                            ),
+                    let file = if item["details"]["saved_image"] == true {
+                        saved::export_png(&s, id)?
+                    } else {
+                        root.join(
+                            item["details"]["path"]
+                                .as_str()
+                                .ok_or("image path missing")?,
                         )
-                        .spawn()?;
+                    };
+                    let mut open = Command::new("/usr/bin/open");
+                    if item["details"]["saved_image"] != true || v["open"] != true {
+                        open.arg("-R");
+                    }
+                    open.arg(file).spawn()?;
                 }
                 "/reveal_source" => {
                     let id = v["id"].as_i64().ok_or("source id required")?;
@@ -788,6 +851,7 @@ fn run() -> Result<()> {
         let response=tiny_http::Response::from_string(text).with_status_code(status).with_header(tiny_http::Header::from_bytes("Content-Type",content_type).unwrap()).with_header(tiny_http::Header::from_bytes("Cache-Control","no-store").unwrap()).with_header(tiny_http::Header::from_bytes("X-Frame-Options","DENY").unwrap()).with_header(tiny_http::Header::from_bytes("Content-Security-Policy","default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'").unwrap());
         let _ = request.respond(response);
     }
+    drop(saves);
     if let Some(b) = &mut native {
         b.stop()
     }

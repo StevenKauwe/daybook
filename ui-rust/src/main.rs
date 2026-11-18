@@ -566,6 +566,11 @@ impl Controls {
                             }
                         }
                         self.status = v;
+                        if self.detail["details"]["ocr_status"] == "pending"
+                            && self.detail_request["kind"] == "observation"
+                        {
+                            self.send("/inspect", Some(self.detail_request.clone()));
+                        }
                         if matches!(self.tab, 1 | 2)
                             && self.pages == 1
                             && self.last_timeline.elapsed() > Duration::from_secs(2)
@@ -591,6 +596,14 @@ impl Controls {
                             self.next = v["next"].clone();
                         } else {
                             self.refresh(false);
+                        }
+                    }
+                    "/retry_saved_ocr" => {
+                        if r.body
+                            .as_ref()
+                            .is_some_and(|b| b["id"] == self.detail["id"])
+                        {
+                            self.detail["details"]["ocr_status"] = json!("pending");
                         }
                     }
                     "/inspect" => {
@@ -769,6 +782,8 @@ impl Controls {
                         ("remote", "Remote audio"),
                         ("screen", "Screen OCR"),
                         ("vision", "Screen vision"),
+                        ("clipboard", "Clipboard"),
+                        ("screenshot", "Saved screenshots"),
                     ] {
                         changed |= ui
                             .selectable_value(&mut self.source, k.into(), label)
@@ -823,14 +838,20 @@ impl Controls {
                     });
                 });
                 let text = item["text"].as_str().unwrap_or("");
-                ui.label(if text.is_empty() {
-                    "Waiting for speech or model output…"
-                } else {
+                let saved_image = item["kind"] == "screen"
+                    && matches!(item["source"].as_str(), Some("clipboard" | "screenshot"));
+                ui.label(if !text.is_empty() {
                     text
+                } else if saved_image {
+                    "Saved image"
+                } else {
+                    "Waiting for speech or model output…"
                 });
                 ui.horizontal(|ui| {
                     if ui
-                        .small_button(if item["truncated"] == true {
+                        .small_button(if saved_image {
+                            "Open saved image entry"
+                        } else if item["truncated"] == true {
                             "Read full entry & inspect"
                         } else {
                             "Inspect evidence"
@@ -1718,7 +1739,11 @@ impl Controls {
             ))
             .strong(),
         );
-        if let Some(text) = v["text"].as_str() {
+        let saved_image = v["details"]["saved_image"] == true;
+        if let Some(text) = v["text"].as_str().filter(|text| !text.is_empty()) {
+            if (saved_image || v["source"] == "clipboard") && ui.button("Copy text").clicked() {
+                ui.ctx().copy_text(text.to_owned());
+            }
             ui.label(text);
         }
         if let Some(error) = v["error"].as_str().filter(|v| !v.is_empty()) {
@@ -1750,7 +1775,39 @@ impl Controls {
                 "Raw .f32 files are mono 16 kHz float32; retained .m4a files are playable AAC.",
             );
         }
-        if v["image_retained"] == true && ui.button("Reveal retained screen image").clicked() {
+        if saved_image {
+            muted(
+                ui,
+                format!(
+                    "Saved PNG · {} × {} pixels",
+                    v["details"]["width"], v["details"]["height"]
+                ),
+            );
+            match v["details"]["ocr_status"].as_str() {
+                Some("pending") => {
+                    ui.label("Reading image text…");
+                }
+                Some("empty") => {
+                    ui.label("No text found in this image.");
+                }
+                Some("failed") => {
+                    ui.label("Daybook kept the image. Text recognition failed.");
+                    if ui.button("Try reading text again").clicked() {
+                        self.send("/retry_saved_ocr", Some(json!({"id":v["id"]})));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let image_action = if saved_image {
+            if v["image_retained"] == true && ui.button("Open saved PNG").clicked() {
+                self.send("/reveal_image", Some(json!({"id":v["id"],"open":true})));
+            }
+            "Show saved PNG in Finder"
+        } else {
+            "Reveal retained screen image"
+        };
+        if v["image_retained"] == true && ui.button(image_action).clicked() {
             self.send("/reveal_image", Some(json!({"id":v["id"]})));
         }
         if let Some(a) = v["sources"].as_array() {

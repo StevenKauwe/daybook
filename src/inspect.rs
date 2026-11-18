@@ -219,7 +219,17 @@ pub fn timeline(s: &Store, v: &Value) -> Result<Value> {
         "transcript_suppressed",
     ]
     .contains(&kind)
-        || !["all", "me", "remote", "screen", "vision", "system"].contains(&source)
+        || ![
+            "all",
+            "me",
+            "remote",
+            "screen",
+            "vision",
+            "system",
+            "clipboard",
+            "screenshot",
+        ]
+        .contains(&source)
     {
         return Err("invalid timeline filter".into());
     }
@@ -266,9 +276,15 @@ pub fn inspect(s: &Store, v: &Value) -> Result<Value> {
                     .collect::<Result<Vec<_>>>()?
             );
             let image = item["details"]["path"].as_str().unwrap_or("");
-            item["image_retained"] = json!(
+            item["image_retained"] = json!(if item["details"]["saved_image"] == true {
+                s.db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM saved_images WHERE observation_id=?1)",
+                    [id],
+                    |r| r.get::<_, bool>(0),
+                )?
+            } else {
                 crate::worker::valid_relative(image, "images") && s.root.join(image).is_file()
-            );
+            });
             Ok(item)
         }
         "job" => {

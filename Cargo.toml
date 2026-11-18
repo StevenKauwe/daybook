@@ -12,6 +12,7 @@ ureq = { version = "2.12", features = ["json"] }
 url = "2"
 base64 = "0.22"
 libc = "0.2"
+tempfile = "3"
 pollster = "1"
 ring = "0.17"
 speechworks-inference = { path = "vendor/speechworks-8d2690a/crates/inference" }

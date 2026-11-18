@@ -170,6 +170,8 @@ struct Controls {
     error: String,
     message: String,
     pending_action: bool,
+    update_pending: bool,
+    update_open: bool,
     note: String,
     note_dirty: Option<Instant>,
     saving_note: bool,
@@ -324,6 +326,7 @@ impl Controls {
         c.minimized = minimized;
         c.meters = meters::Feed::start(c.base.clone(), cc.egui_ctx.clone());
         c.send("/overview", None);
+        c.send("/resume_workspace", Some(json!({})));
         c.follow_stream();
         c
     }
@@ -341,6 +344,8 @@ impl Controls {
             error: String::new(),
             message: String::new(),
             pending_action: false,
+            update_pending: false,
+            update_open: false,
             note: String::new(),
             note_dirty: None,
             saving_note: false,
@@ -427,6 +432,9 @@ impl Controls {
         let mut v =
             json!({"day":self.day,"kind":self.kind,"source":self.source,"query":self.query});
         if self.tab == 1 {
+            if self.archive.by_session {
+                v["sessions"] = json!(true);
+            }
             if let Some((from, until)) = self.archive.selection {
                 v["from"] = json!(from);
                 v["until"] = json!(until);
@@ -530,6 +538,9 @@ impl Controls {
             if r.path == "/command" {
                 self.pending_action = false;
             }
+            if r.path == "/update" {
+                self.update_pending = false;
+            }
             if r.path == "/note" {
                 self.saving_note = false;
             }
@@ -595,8 +606,8 @@ impl Controls {
                             if let Ok(c) = serde_json::from_value(v["config"].clone()) {
                                 self.reading =
                                     reading::ReadingStyle::saved(&v["reading"].to_string());
+                                self.saved_config = serde_json::to_value(&c).unwrap();
                                 self.config = c;
-                                self.saved_config = v["config"].clone();
                                 self.note = v["draft"].as_str().unwrap_or("").into();
                                 self.loaded = true;
                             }
@@ -618,9 +629,11 @@ impl Controls {
                     "/timeline" => {
                         let b = r.body.unwrap_or_default();
                         let filter = self.filter();
-                        if ["day", "kind", "source", "query", "from", "until"]
-                            .iter()
-                            .all(|k| b[*k] == filter[*k])
+                        if [
+                            "day", "kind", "source", "query", "from", "until", "sessions",
+                        ]
+                        .iter()
+                        .all(|k| b[*k] == filter[*k])
                         {
                             if b["background"] == true && self.tab == 1 && self.archive.reading_back
                             {
@@ -651,6 +664,9 @@ impl Controls {
                             self.archive.loaded_filter = filter;
                             if v["activity"].is_object() {
                                 self.archive.activity = v["activity"].take();
+                            }
+                            if v["sessions"].is_array() {
+                                self.archive.sessions = v["sessions"].take();
                             }
                             self.jobs = v["jobs"]
                                 .as_array_mut()
@@ -702,10 +718,9 @@ impl Controls {
                         }
                     }
                     "/draft" | "/reading" => {}
+                    "/resume_workspace" => self.restore_workspace(&v),
                     "/update" => {
-                        self.message =
-                            "Update started. Finishing transcription, then building local changes…"
-                                .into();
+                        self.status["update"] = v;
                         self.error.clear();
                         self.send("/overview", None);
                     }
@@ -1225,8 +1240,8 @@ impl Controls {
         });
     }
     fn settings(&mut self, ui: &mut egui::Ui) {
-        let dirty = serde_json::to_value(&self.config).ok().as_ref() != Some(&self.saved_config);
-        if self.status["update"]["busy"] == true {
+        let dirty = self.settings_dirty();
+        if self.updating() {
             self.update_card(ui, dirty);
             return;
         }
@@ -1560,15 +1575,58 @@ impl Controls {
             }
         }
     }
+    fn settings_dirty(&self) -> bool {
+        self.loaded && serde_json::to_value(&self.config).ok().as_ref() != Some(&self.saved_config)
+    }
+    fn updating(&self) -> bool {
+        self.update_pending || self.status["update"]["busy"] == true
+    }
+    fn start_update(&mut self) {
+        self.update_open = true;
+        if !self.loaded
+            || self.updating()
+            || self.settings_dirty()
+            || self.status["update"]["available"] != true
+        {
+            return;
+        }
+        let view = json!({"page":self.tab,"settings":self.settings_tab,"health":self.health_tab,
+            "filter":self.filter(),"focus":self.focus});
+        if self.send("/update", Some(json!({"draft":self.note,"workspace":view}))) {
+            self.error.clear();
+            self.update_pending = true;
+        }
+    }
+    fn restore_workspace(&mut self, view: &Value) {
+        let Some(page) = view["page"].as_u64().filter(|p| *p < 5) else {
+            return;
+        };
+        self.settings_tab = view["settings"].as_u64().unwrap_or(0).min(3) as usize;
+        self.health_tab = view["health"].as_u64().unwrap_or(0).min(2) as usize;
+        let f = &view["filter"];
+        if matches!(page, 1 | 2) {
+            if let Some(day) = f["day"]
+                .as_str()
+                .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+            {
+                self.day = day.to_string();
+                self.day_edit = self.day.clone();
+                self.kind = f["kind"].as_str().unwrap_or("all").into();
+                self.source = f["source"].as_str().unwrap_or("all").into();
+                self.query = f["query"].as_str().unwrap_or("").into();
+                self.archive.restore_filter(f, &self.query);
+            }
+        }
+        self.navigate(page as usize);
+        self.focus = page == 0 && view["focus"] == true;
+        self.notice = Some(("Daybook updated".into(), Instant::now()));
+    }
     fn update_card(&mut self, ui: &mut egui::Ui, dirty: bool) {
         let update = self.status["update"].clone();
-        let busy = update["busy"] == true;
+        let busy = self.updating();
         card(ui, |ui| {
             ui.heading("App updates");
-            muted(
-                ui,
-                "Build the latest changes in your local Daybook checkout. Speechworks stays pinned; this does not pull from GitHub.",
-            );
+            muted(ui, "Builds the code in your local Daybook checkout.");
             if let Some(at) = update["installed_build"]["built_at"].as_str() {
                 muted(ui, format!("Installed build: {at}"));
             }
@@ -1576,9 +1634,13 @@ impl Controls {
                 if busy {
                     ui.spinner();
                 }
-                let message = update["message"]
-                    .as_str()
-                    .unwrap_or("Checking update availability…");
+                let message = if self.update_pending {
+                    "Starting update…"
+                } else {
+                    update["message"]
+                        .as_str()
+                        .unwrap_or("Checking update availability…")
+                };
                 if ["failed", "interrupted"].contains(&update["phase"].as_str().unwrap_or("")) {
                     ui.colored_label(CORAL, message);
                 } else {
@@ -1587,7 +1649,7 @@ impl Controls {
             });
             if ui
                 .add_enabled(
-                    !busy && !dirty && update["available"] == true,
+                    self.loaded && !busy && !dirty && update["available"] == true,
                     egui::Button::new(if busy {
                         "Updating…"
                     } else {
@@ -1596,15 +1658,11 @@ impl Controls {
                 )
                 .clicked()
             {
-                if self.send("/update", Some(json!({"draft":self.note}))) {
-                    self.status["update"]["busy"] = json!(true);
-                    self.status["update"]["message"] = json!("Starting update…");
-                    self.message = "Update requested. Recording will stop and queued transcription will finish before restart.".into();
-                }
+                self.start_update();
             }
             muted(
                 ui,
-                "Stops recording, finishes queued audio, builds and verifies the update, then reopens stopped. Saved text, notes, settings and permissions stay in place. A failed build leaves this app open.",
+                "Daybook finishes any queued audio, verifies the build, and reopens this page with recording stopped.",
             );
             if dirty {
                 ui.colored_label(
@@ -1974,8 +2032,10 @@ impl eframe::App for Controls {
         let hidden = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
         self.minimized
             .store(hidden, std::sync::atomic::Ordering::Relaxed);
-        self.detailed_poll
-            .store(self.tab != 0, std::sync::atomic::Ordering::Relaxed);
+        self.detailed_poll.store(
+            self.tab != 0 || self.update_open,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         self.meters
             .visibility(!hidden && self.tab == 0 && !self.focus);
         if self

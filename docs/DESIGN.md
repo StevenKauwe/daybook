@@ -20,7 +20,7 @@ The design uses explicit status, consistent actions and keyboard access. The com
 
 The Archive uses the day’s actual activity to draw a 15-minute histogram. A drag selects a time interval. The journal below it groups entries by hour and gives the words more room than the source labels. A reader can open an image alongside its text, enlarge it, then close the entry in the same window. Background refresh waits while someone reads back. A manual refresh preserves the visible entry when newer entries arrive.
 
-Two possible follow-ups serve different ways of remembering a day. A **session view** could gather a nearby conversation, screenshot and note around a gap in activity, with the actual times visible so a coincidental overlap is clear. A **visual index** could show a strip of saved screenshots above their time range for someone who remembers what a page looked like. Both can use the current timestamped entries without rewriting the journal.
+**Sessions** groups activity until a 15-minute gap. A group spans ongoing passages, including across hour and pagination boundaries. A note or a saved image can supply its title. A search matches any entry in the group, and opening the result selects the whole session so its conversation, notes and screen entries can be read or copied together. A possible visual index could also show a strip of saved screenshots for someone who remembers what a page looked like.
 
 ## Native previews
 

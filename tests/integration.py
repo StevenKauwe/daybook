@@ -9,10 +9,10 @@ checks=[]
 def check(name,condition):
     assert condition,name
     checks.append(name);print('PASS',name,flush=True)
-def launch():
+def launch(*args):
     global process,url
     (root/'control-url.txt').unlink(missing_ok=True)
-    process=subprocess.Popen([str(BIN),'--synthetic','--data',str(root)],stdout=open(root/'stdout.log','a'),stderr=open(root/'stderr.log','a'))
+    process=subprocess.Popen([str(BIN),'--synthetic','--data',str(root),*args],stdout=open(root/'stdout.log','a'),stderr=open(root/'stderr.log','a'))
     for _ in range(100):
         if (root/'control-url.txt').exists():break
         if process.poll() is not None:raise RuntimeError((root/'stderr.log').read_text())
@@ -44,7 +44,12 @@ class Mock(http.server.BaseHTTPRequestHandler):
     def log_message(self,*args):pass
 mock=None
 try:
-    launch();check('starts stopped',api('/status')[1]['active']=='false')
+    view = {'page': 1, 'filter': {'day': '2026-11-17', 'sessions': True}}
+    (root/'update').mkdir()
+    (root/'update/workspace.json').write_text(json.dumps(view))
+    launch('--after-update');check('starts stopped',api('/status')[1]['active']=='false')
+    check('updated controls can restore their Archive page once',
+          api('/resume_workspace', {}) == (200, view) and api('/resume_workspace', {}) == (200, None))
     check('paused ingestion rejected',api('/synthetic',{})[0]==400)
     check('cross-origin request rejected',api('/command',{'command':'start'},{'Origin':'https://evil.invalid'})[0]==403)
     check('start',command('start')[0]==200)

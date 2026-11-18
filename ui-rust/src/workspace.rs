@@ -111,9 +111,15 @@ impl Controls {
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button(RichText::new("•••").strong(), |ui| {
-                    if ui.button("Update & Restart…").clicked() {
-                        self.navigate(4);
-                        self.settings_tab = 3;
+                    let update_label = if self.updating() {
+                        "View update progress…"
+                    } else if stop {
+                        "Stop recording, update & restart"
+                    } else {
+                        "Update & Restart"
+                    };
+                    if ui.button(update_label).clicked() {
+                        self.start_update();
                         ui.close();
                     }
                     if ui
@@ -157,10 +163,7 @@ impl Controls {
                     .corner_radius(10)
                     .min_size(egui::vec2(126., 39.));
                 if ui
-                    .add_enabled(
-                        fresh && !self.pending_action && self.status["update"]["busy"] != true,
-                        button,
-                    )
+                    .add_enabled(fresh && !self.pending_action && !self.updating(), button)
                     .on_hover_text(if stop {
                         "Stop and stay off until you deliberately enable recording again."
                     } else {
@@ -447,6 +450,27 @@ impl Controls {
                 });
         }
         self.note_dialog(ui.ctx());
+        if self.update_open {
+            let mut open = true;
+            egui::Window::new("Daybook update")
+                .open(&mut open)
+                .default_width(445.)
+                .vscroll(true)
+                .show(ui.ctx(), |ui| {
+                    self.update_card(ui, self.settings_dirty());
+                    if self.settings_dirty()
+                        && self.tab != 4
+                        && ui.button("Review settings edits").clicked()
+                    {
+                        self.update_open = false;
+                        self.navigate(4);
+                    }
+                    if !self.error.is_empty() {
+                        ui.colored_label(CORAL, &self.error);
+                    }
+                });
+            self.update_open &= open;
+        }
     }
 }
 
@@ -505,6 +529,155 @@ mod tests {
                 modifiers,
             })
             .to_vec()
+    }
+    fn paint_controls(
+        ctx: &egui::Context,
+        c: &mut Controls,
+        events: Vec<egui::Event>,
+    ) -> Vec<(String, egui::Pos2)> {
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1120., 790.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| c.workspace(ui),
+        );
+        let labels = out
+            .shapes
+            .iter()
+            .filter_map(|shape| {
+                let egui::Shape::Text(t) = &shape.shape else {
+                    return None;
+                };
+                let visible = t
+                    .galley
+                    .rect
+                    .translate(t.pos.to_vec2())
+                    .intersect(shape.clip_rect);
+                visible
+                    .is_positive()
+                    .then(|| (t.galley.job.text.clone(), visible.center()))
+            })
+            .collect();
+        out.drop_without_applying_deltas();
+        labels
+    }
+    fn click_label(ctx: &egui::Context, c: &mut Controls, label: &str) {
+        paint_controls(ctx, c, vec![]);
+        let labels = paint_controls(ctx, c, vec![]);
+        let pos = labels
+            .iter()
+            .find(|(s, _)| s.lines().next() == Some(label))
+            .unwrap_or_else(|| panic!("missing {label} in {labels:?}"))
+            .1;
+        for pressed in [true, false] {
+            paint_controls(
+                ctx,
+                c,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+    }
+    #[test]
+    fn corner_menu_submits_one_update_from_archive_and_the_successor_restores_the_view() {
+        let ctx = egui::Context::default();
+        design::setup(&ctx);
+        let (tx, requests) = mpsc::sync_channel(30);
+        let (reply, rx) = mpsc::sync_channel(30);
+        let mut c = preview::fixture(tx, rx);
+        preview::archive_fixture(&mut c, true);
+        c.status["active"] = json!("false");
+        c.status["armed"] = json!("false");
+        c.status["update"] = json!({"available":true,"busy":false});
+        c.note = "Remember the route".into();
+        click_label(&ctx, &mut c, "•••");
+        click_label(&ctx, &mut c, "Update & Restart");
+        assert!(c.update_open && c.update_pending);
+        assert_eq!(c.tab, 1);
+        c.start_update();
+        let requests: Vec<_> = requests
+            .try_iter()
+            .filter(|r| r.path == "/update")
+            .collect();
+        assert_eq!(requests.len(), 1);
+        let body = requests[0].body.as_ref().unwrap();
+        assert_eq!(body["draft"], "Remember the route");
+        assert_eq!(body["workspace"]["filter"], c.filter());
+        let (tx, next_requests) = mpsc::sync_channel(12);
+        let (_, rx) = mpsc::sync_channel(12);
+        let mut next = Controls::initial("fixture".into(), tx, rx);
+        next.restore_workspace(&body["workspace"]);
+        assert_eq!(next.tab, 1);
+        assert_eq!(next.filter(), c.filter());
+        assert!(next_requests.try_iter().any(|r| r.path == "/timeline"));
+        reply
+            .send(Reply {
+                path: "/update".into(),
+                body: Some(body.clone()),
+                result: Err("Finish the screenshot first".into()),
+            })
+            .unwrap();
+        c.poll();
+        assert!(!c.updating() && c.update_open);
+        assert!(c.error.contains("screenshot"));
+    }
+    #[test]
+    fn unavailable_updates_and_settings_drafts_keep_the_request_local() {
+        let (tx, requests) = mpsc::sync_channel(12);
+        let (_, rx) = mpsc::sync_channel(12);
+        let mut c = preview::fixture(tx, rx);
+        c.tab = 2;
+        c.status["update"] = json!({"available":false,"busy":false});
+        c.start_update();
+        assert!(c.update_open && !c.update_pending);
+        c.status["update"]["available"] = json!(true);
+        c.config.screen_seconds += 1;
+        c.start_update();
+        assert!(c.settings_dirty() && !c.update_pending);
+        assert!(requests.try_iter().all(|r| r.path != "/update"));
+        assert_eq!(c.tab, 2);
+    }
+    #[test]
+    fn a_matching_session_opens_its_entire_time_selection() {
+        let ctx = egui::Context::default();
+        design::setup(&ctx);
+        let (tx, requests) = mpsc::sync_channel(30);
+        let (reply, rx) = mpsc::sync_channel(30);
+        let mut c = preview::fixture(tx, rx);
+        preview::archive_fixture(&mut c, false);
+        c.query = "map".into();
+        click_label(&ctx, &mut c, "Sessions");
+        let request = requests.try_iter().find(|r| r.path == "/timeline").unwrap();
+        assert_eq!(request.body.as_ref().unwrap()["sessions"], true);
+        let at = c.items[0]["at"].as_i64().unwrap();
+        let result = json!({"items":[],"sessions":[{"start":at-60,"until":at+1,"title":"Harbor walk","entries":3,
+            "notes":1,"passages":1,"screens":1}],"activity":c.archive.activity});
+        reply
+            .send(Reply {
+                path: request.path,
+                body: request.body,
+                result: Ok(result),
+            })
+            .unwrap();
+        c.poll();
+        click_label(&ctx, &mut c, "Harbor walk");
+        assert!(!c.archive.by_session);
+        assert_eq!(c.archive.selection, Some((at - 60, at + 1)));
+        assert_eq!(c.query, "");
+        let request = requests.try_iter().find(|r| r.path == "/timeline").unwrap();
+        assert_eq!(request.body.unwrap()["from"], at - 60);
     }
     #[test]
     fn compact_and_wide_transcripts_paint_both_inputs_the_latest_words_and_the_stop_control() {

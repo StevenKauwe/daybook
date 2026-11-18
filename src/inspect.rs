@@ -275,6 +275,92 @@ const MATCH_ENTRY: &str =
     "((?3='all' AND kind IN ('transcript','preview','note','screen')) OR kind=?3)
     AND (?4='all' OR source=?4) AND (?5='' OR instr(lower(text),lower(?5))>0)";
 
+#[derive(Default, serde::Serialize)]
+struct ArchiveSession {
+    start: i64,
+    until: i64,
+    title: String,
+    entries: usize,
+    notes: usize,
+    screens: usize,
+    passages: usize,
+    #[serde(skip)]
+    title_rank: u8,
+    #[serde(skip)]
+    matches: bool,
+}
+
+fn archive_sessions(s: &Store, f: &ArchiveQuery<'_>) -> Result<Vec<ArchiveSession>> {
+    // Establish groups from the whole day. Searching for a map should still find the
+    // conversation beside it, even if "map" appears only in the screenshot.
+    let (day_start, day_end) = f.bounds;
+    let (from, until) = f.selected.unwrap_or(f.bounds);
+    let mut q = s.db.prepare(&format!(
+        "SELECT at,end_at,kind,source,substr(text,1,144),
+            (({MATCH_ENTRY}) AND at<?7 AND (at>=?6 OR end_at>?6))
+         FROM {RANGE_ENTRIES} AND (kind IN ('transcript','preview','note','screen') OR kind=?3)
+         ORDER BY at,id"
+    ))?;
+    let mut rows = q.query(params![
+        day_start, day_end, f.kind, f.source, f.query, from, until
+    ])?;
+    let mut sessions: Vec<ArchiveSession> = Vec::new();
+    let mut last_activity = day_start;
+    while let Some(row) = rows.next()? {
+        let at = row.get::<_, i64>(0)?.max(day_start);
+        let last = row.get::<_, i64>(1)?.max(at).min(day_end);
+        let end = last.max(at + 1);
+        if sessions.is_empty() || at - last_activity >= 15 * 60 {
+            sessions.push(ArchiveSession {
+                start: at,
+                until: end,
+                ..Default::default()
+            });
+        }
+        last_activity = last_activity.max(last);
+        let group = sessions.last_mut().unwrap();
+        group.until = group.until.max(end);
+        group.entries += 1;
+        group.matches |= row.get::<_, bool>(5)?;
+        let kind = row.get_ref(2)?.as_str()?;
+        let source = row.get_ref(3)?.as_str()?;
+        let rank = match kind {
+            "note" => {
+                group.notes += 1;
+                if source == "me" { 4 } else { 3 }
+            }
+            "screen" => {
+                group.screens += 1;
+                if matches!(source, "screenshot" | "clipboard") {
+                    3
+                } else {
+                    1
+                }
+            }
+            "transcript" | "preview" => {
+                group.passages += 1;
+                2
+            }
+            _ => 1,
+        };
+        if rank > group.title_rank {
+            if let Some(line) = row
+                .get_ref(4)?
+                .as_str()?
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+            {
+                group.title = line.chars().take(100).collect();
+                group.title_rank = rank;
+            }
+        }
+    }
+    sessions.retain(|g| g.matches);
+    sessions.reverse();
+    Ok(sessions)
+}
+
 pub fn copy_time_range(s: &Store, v: &Value) -> Result<Value> {
     use std::fmt::Write;
     let f = ArchiveQuery::parse(v)?;
@@ -348,6 +434,9 @@ pub fn timeline(s: &Store, v: &Value) -> Result<Value> {
     let mut q=s.db.prepare("SELECT id,kind,lo,hi,status,substr(text,1,2000),error FROM jobs WHERE id IN (SELECT job_id FROM job_days WHERE day=?1) ORDER BY id DESC LIMIT 50")?;
     let jobs=q.query_map([day],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"kind":r.get::<_,String>(1)?,"lo":r.get::<_,i64>(2)?,"hi":r.get::<_,i64>(3)?,"status":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"error":r.get::<_,String>(6)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
     let mut result = json!({"day":day,"items":rows,"next":cursor,"jobs":jobs,"summary_limit":50});
+    if v["sessions"] == true && v["before_id"].is_null() {
+        result["sessions"] = serde_json::to_value(archive_sessions(s, &f)?)?;
+    }
     if v["activity"] == true && v["before_id"].is_null() {
         let (start, end) = f.bounds;
         let mut bins = vec![0u32; ((end - start + 899) / 900) as usize];
@@ -511,6 +600,57 @@ pub fn source(s: &Store, id: i64) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sessions_find_related_entries_across_pages_and_keep_real_breaks() {
+        let root = tempfile::tempdir().unwrap();
+        let s = Store::open(root.path()).unwrap();
+        let day = "2026-11-17";
+        let a = day_bounds(day).unwrap().0 + 9 * 3600;
+        let add = |at, end, kind, source, text| {
+            s.observation(a + at, a + end, kind, source, text, &json!({}), None)
+                .unwrap();
+        };
+        add(0, 1800, "transcript", "me", "Opening remarks");
+        for i in 1..=105 {
+            add(i, i + 1, "transcript", "remote", "Discussion");
+        }
+        add(1850, 1850, "screen", "screenshot", "Route map");
+        add(1860, 1860, "note", "me", "Harbor walk");
+        add(2760, 2760, "note", "me", "Next project");
+        let full = timeline(&s, &json!({"day":day,"sessions":true})).unwrap();
+        assert_eq!(full["items"].as_array().unwrap().len(), 100);
+        assert_eq!(full["sessions"].as_array().unwrap().len(), 2);
+        let selected = timeline(
+            &s,
+            &json!({"day":day,"sessions":true, "query":"map", "source":"screenshot"}),
+        )
+        .unwrap();
+        let groups = selected["sessions"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0],
+            json!({"start":a,"until":a+1861,"title":"Harbor walk","entries":108,
+            "notes":1,"screens":1,"passages":106})
+        );
+        let copied = copy_time_range(
+            &s,
+            &json!({"day":day,"from":groups[0]["start"],"until":groups[0]["until"]}),
+        )
+        .unwrap();
+        assert_eq!(copied["count"], 108);
+        assert!(!copied["text"].as_str().unwrap().contains("Next project"));
+        assert_eq!(
+            timeline(
+                &s,
+                &json!({"day":day,"sessions":true,"from":a+2500,"until":a+2800})
+            )
+            .unwrap()["sessions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
     #[test]
     fn time_selection_uses_complete_entries_across_pages_and_keeps_chronology() {
         let root = tempfile::tempdir().unwrap();

@@ -351,6 +351,8 @@ fn run() -> Result<()> {
             .map_err(|_| "existing Daybook instance could not be focused")?;
         return Ok(());
     }
+    let mut resume_workspace =
+        update::take_workspace(&root, args.iter().any(|s| s == "--after-update"));
     let s = Store::open(&root)?;
     let inbox: live_audio::Shared = Default::default();
     let meters: realtime::Shared = Default::default();
@@ -614,6 +616,9 @@ fn run() -> Result<()> {
             }
             let v: Value = serde_json::from_slice(&body)?;
             match endpoint {
+                "/resume_workspace" => {
+                    return Ok(resume_workspace.take().unwrap_or(Value::Null).to_string());
+                }
                 "/update" => {
                     if saves.busy() {
                         return Err("Finish or cancel the current save before updating".into());
@@ -624,7 +629,8 @@ fn run() -> Result<()> {
                         }
                         s.state("note_draft", draft)?;
                     }
-                    update::begin(&root, synthetic)?;
+                    update::begin(&root, synthetic, v.get("workspace"))?;
+                    return Ok(update::status(&root, synthetic).to_string());
                 }
                 "/timeline" => return Ok(inspect::timeline(&s, &v)?.to_string()),
                 "/copy_time_range" => return Ok(inspect::copy_time_range(&s, &v)?.to_string()),

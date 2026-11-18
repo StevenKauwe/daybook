@@ -31,6 +31,8 @@ For the last two columns, a separate helper decodes the same PNG and calls Visio
 
 Yes. Daybook’s periodic capture currently takes a 1280-pixel-wide screenshot and compares a tiny whole-screen thumbnail. A small edit can disappear in that average. An opt-in screen stream could use ScreenCaptureKit’s per-frame changed rectangles and idle status. Apple Vision can recognize text in a specified region. These APIs are available on Daybook’s supported Macs. [ScreenCaptureKit frame changes](https://developer.apple.com/documentation/screencapturekit/scstreamframeinfo/dirtyrects) · [Idle frames](https://developer.apple.com/documentation/screencapturekit/scframestatus/idle) · [Vision regions of interest](https://developer.apple.com/documentation/vision/vnimagebasedrequest/regionofinterest)
 
+Vision also reports where recognized words appear. Periodic OCR already saves each available word box as X, Y, width and height on a 0–1 scale from the image’s lower-left corner, up to 1,000 boxes. Manually saved screenshots and clipboard images currently keep the original image and plain text. For a stream, a word’s position and its neighbors can help identify a line that moved during a scroll. [Apple’s text recognition guide](https://developer.apple.com/documentation/vision/recognizing-text-in-images)
+
 On the M2 Max, an eight-frame, 1920 × 1080 synthetic sequence contained a page, an appended line, a date changed from November 18 to 19, and a scroll that brought another line into view. Each state appeared twice. Both approaches recovered the same 13 distinct lines in order, including both dates.
 
 | Approach | OCR calls | Median time in the OCR helper across eight frames |

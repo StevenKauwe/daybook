@@ -24,6 +24,8 @@ pub struct Archive {
     rows: Vec<Row>,
     height: f32,
     pub activity: Value,
+    pub by_session: bool,
+    pub sessions: Value,
     pub selection: Option<(i64, i64)>,
     drag: Option<(i64, i64)>,
     from_edit: String,
@@ -72,6 +74,7 @@ impl Archive {
     pub fn reset_day(&mut self) {
         self.selection = None;
         self.activity = Value::Null;
+        self.sessions = Value::Null;
         self.rows.clear();
         self.height = 0.;
         self.loaded_filter = Value::Null;
@@ -158,6 +161,16 @@ impl Archive {
             self.activity["end"].as_i64()?,
         ))
     }
+    pub(super) fn restore_filter(&mut self, f: &Value, query: &str) {
+        self.by_session = f["sessions"] == true;
+        self.search_edit = query.to_owned();
+        self.apply(
+            f["from"]
+                .as_i64()
+                .zip(f["until"].as_i64())
+                .filter(|(a, b)| a < b),
+        );
+    }
     fn apply(&mut self, range: Option<(i64, i64)>) {
         self.selection = range;
         self.drag = None;
@@ -167,7 +180,9 @@ impl Archive {
         self.time_error.clear();
         if let Some((a, b)) = range {
             self.from_edit = clock(a, "%H:%M:%S");
-            self.until_edit = if self.bounds().is_some_and(|(_, end)| end == b) {
+            self.until_edit = if self.bounds().is_some_and(|(_, end)| end == b)
+                || clock(b, "%H:%M:%S") == "00:00:00"
+            {
                 "24:00".into()
             } else {
                 clock(b, "%H:%M:%S")
@@ -326,6 +341,76 @@ impl Archive {
     }
 }
 impl Controls {
+    fn show_sessions(&mut self, ui: &mut egui::Ui) {
+        let mut selected = None;
+        let Some(groups) = self.archive.sessions.as_array() else {
+            return;
+        };
+        egui::ScrollArea::vertical()
+            .id_salt("archive_sessions")
+            .show(ui, |ui| {
+                for group in groups {
+                    let (Some(start), Some(until)) =
+                        (group["start"].as_i64(), group["until"].as_i64())
+                    else {
+                        continue;
+                    };
+                    let start_time = clock(start, "%-I:%M %p");
+                    let end_time = clock(until - 1, "%-I:%M %p");
+                    let mut details = vec![if start_time == end_time {
+                        start_time
+                    } else {
+                        format!("{start_time} – {end_time}")
+                    }];
+                    for (key, singular, plural) in [
+                        ("passages", "passage", "passages"),
+                        ("notes", "note", "notes"),
+                        ("screens", "screen entry", "screen entries"),
+                    ] {
+                        if let Some(n) = group[key].as_u64().filter(|n| *n > 0) {
+                            details.push(format!("{n} {}", if n == 1 { singular } else { plural }));
+                        }
+                    }
+                    let title = group["title"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("Activity");
+                    let mut text = egui::text::LayoutJob::default();
+                    text.append(
+                        title,
+                        0.,
+                        egui::TextFormat::simple(design::passage_font(19.), design::TEXT),
+                    );
+                    text.append(
+                        &format!("\n{}", details.join("  ·  ")),
+                        0.,
+                        egui::TextFormat::simple(egui::FontId::proportional(13.), MUTED),
+                    );
+                    let button = egui::Button::new(text)
+                        .right_text("›")
+                        .frame_when_inactive(false)
+                        .min_size(egui::vec2(ui.available_width(), 58.));
+                    if ui
+                        .add(button)
+                        .on_hover_text("Open all entries in this session")
+                        .clicked()
+                    {
+                        selected = Some((start, until));
+                    }
+                    ui.separator();
+                }
+            });
+        if let Some(range) = selected {
+            self.kind = "all".into();
+            self.source = "all".into();
+            self.query.clear();
+            self.archive.search_edit.clear();
+            self.archive.by_session = false;
+            self.archive.activity = Value::Null;
+            self.archive.apply(Some(range));
+            self.archive_changed();
+        }
+    }
     fn archive_changed(&mut self) {
         self.pages = 1;
         self.archive.rewind = true;
@@ -411,9 +496,17 @@ impl Controls {
     pub(super) fn timeline(&mut self, ui: &mut egui::Ui) {
         self.date_bar(ui);
         ui.add_space(3.);
-        let changed = self.range_controls(ui);
+        let mut changed = self.range_controls(ui);
         let mut filters = false;
         ui.horizontal_wrapped(|ui| {
+            changed |= ui
+                .selectable_value(&mut self.archive.by_session, false, "By hour")
+                .changed();
+            changed |= ui
+                .selectable_value(&mut self.archive.by_session, true, "Sessions")
+                .on_hover_text("Group nearby entries until a 15-minute break")
+                .changed();
+            ui.separator();
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.archive.search_edit)
                     .desired_width(175.)
@@ -470,7 +563,17 @@ impl Controls {
             ui.weak("Loading entries…");
             return;
         }
-        if self.items.is_empty() {
+        if self.archive.by_session
+            && self
+                .archive
+                .sessions
+                .as_array()
+                .is_some_and(|s| !s.is_empty())
+        {
+            self.show_sessions(ui);
+            return;
+        }
+        if self.items.is_empty() || self.archive.by_session {
             ui.add_space(24.);
             ui.heading(
                 if self.archive.selection.is_some()

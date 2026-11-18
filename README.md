@@ -30,6 +30,8 @@ Open **Daybook controls → Archive** and search for a word from the note or ima
 
 To take part of a day with you, drag across the **Day timeline**, then click **Copy selection**. Click a single bar for a 15-minute interval or choose **Set times…** to enter exact times. The clipboard gets matching entries in chronological order with their times and sources. It includes complete passages that overlap the range, even across a page boundary. Images contribute their extracted text, or a timestamped entry when they have no text. A range ends at the selected **Until** time. Selections larger than 2 MiB prompt you to narrow the range.
 
+Choose **Sessions** to browse conversations alongside the notes and screenshots saved around them. A 15-minute break starts a new session. Searching for a word on a screenshot finds its session. Open the session to see all its entries or use **Copy selection** to take them with you.
+
 The journal keeps each manually saved image even when periodic screenshots are off or expire. Daybook stores the image before it reads the text with Apple Vision on your Mac. If recognition fails, open the entry and choose **Try reading text again**. Saved image pixels stay local. If you enable a hosted summary provider, clipboard notes and extracted text can be included in summaries. The storage limit applies to manual saves. Each save accepts up to 512 KiB of text or a 64 MiB image of up to 40 megapixels.
 
 On an M2 Max, reading a generated page of 144 words took 0.24–0.30 seconds across 720p, 1080p and 4K. Peak memory for the short-lived OCR process ranged from 78 to 143 MiB. [Benchmark results and instructions](docs/OCR-BENCHMARK.md)
@@ -103,7 +105,7 @@ For a speech check with your own fixture, run `python3 tests/model_smoke.py /pat
 
 ## App management pattern
 
-A second launch focuses the existing controls. Closing the controls leaves the menu-bar recorder available. Quit closes the app. To install newer source, quit Daybook, run `git pull --ff-only` and run `just install` again. If you configured a stable local signing identity, **Settings → Permissions & app → App updates** can also rebuild the current checkout offline. The updater drains the recorder, verifies the staged bundle and reopens stopped. It attempts rollback if the successor fails to start.
+A second launch focuses the existing controls. Closing the controls leaves the menu-bar recorder available. Quit closes the app. Run `git pull --ff-only` in the checkout to get newer source from GitHub. With a stable local signing identity, choose **••• → Update & Restart** from any page to build that source. Progress appears over the current page. Daybook finishes queued audio, verifies the replacement and reopens the same page with recording stopped. On an ad-hoc installation, quit Daybook and run `just install` again. The in-app updater attempts rollback if the successor fails to start.
 
 ### Streaming validation and limitations
 

@@ -81,18 +81,25 @@ pub fn status(root: &Path, synthetic: bool) -> Value {
         v["message"] =
             json!("The last updater stopped unexpectedly. Recording remains off; you can retry.");
     }
-    let available = !synthetic
-        && project().join("build.sh").is_file()
-        && project().join("data/signing-identity.txt").is_file()
-        && target().is_ok_and(|p| p.is_dir());
-    v["busy"] = json!(running);
-    v["available"] = json!(available);
-    v["source"] = json!(project());
-    v["unavailable_reason"] = json!(if synthetic {
-        "Updates are disabled in synthetic mode."
+    let unavailable_reason = if synthetic {
+        Some("Updates are disabled in a sample session.")
+    } else if !project().join("build.sh").is_file() {
+        Some(
+            "Daybook cannot find the checkout used for this build. Run just install from your Daybook checkout.",
+        )
+    } else if !target().is_ok_and(|p| p.is_dir()) {
+        Some("Install Daybook in ~/Applications by running just install in your checkout.")
+    } else if !project().join("data/signing-identity.txt").is_file() {
+        Some(
+            "In-app updates need a stable signing identity on this Mac. You can quit Daybook and run just install from your checkout.",
+        )
     } else {
-        "Requires this local checkout, its stable signing identity and ~/Applications/Daybook.app."
-    });
+        None
+    };
+    v["busy"] = json!(running);
+    v["available"] = json!(unavailable_reason.is_none());
+    v["source"] = json!(project());
+    v["unavailable_reason"] = json!(unavailable_reason);
     v["installed_build"] = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent()?.parent()?.parent().map(build_info))
@@ -106,7 +113,20 @@ pub fn status(root: &Path, synthetic: bool) -> Value {
     }
     v
 }
-pub fn begin(root: &Path, synthetic: bool) -> Result<()> {
+// Only a launch by the updater may restore the controls. A normal launch also
+// clears any leftover view from an interrupted update.
+pub fn take_workspace(root: &Path, after_update: bool) -> Option<Value> {
+    let path = directory(root).join("workspace.json");
+    let mut bytes = Vec::new();
+    if after_update {
+        let _ = File::open(&path).and_then(|f| f.take(4097).read_to_end(&mut bytes));
+    }
+    let _ = fs::remove_file(path);
+    (bytes.len() <= 4096)
+        .then(|| serde_json::from_slice(&bytes).ok())
+        .flatten()
+}
+pub fn begin(root: &Path, synthetic: bool, workspace: Option<&Value>) -> Result<()> {
     if synthetic {
         return Err("In-app updates are disabled in synthetic mode".into());
     }
@@ -114,6 +134,15 @@ pub fn begin(root: &Path, synthetic: bool) -> Result<()> {
         return Err("Local source, installed app or stable signing identity is unavailable".into());
     }
     let lock = acquire(root)?;
+    if let Some(view) = workspace {
+        let bytes = serde_json::to_vec(view)?;
+        if !view.is_object() || bytes.len() > 4096 {
+            return Err("Invalid update return view".into());
+        }
+        fs::write(directory(root).join("workspace.json"), bytes)?;
+    } else {
+        take_workspace(root, false);
+    }
     save(
         root,
         "draining",
@@ -145,6 +174,7 @@ pub fn begin(root: &Path, synthetic: bool) -> Result<()> {
             Ok(())
         }
         Err(e) => {
+            take_workspace(root, false);
             save(
                 root,
                 "failed",
@@ -363,6 +393,7 @@ fn launch(bundle: &Path, root: &Path) -> Result<()> {
         .arg("--args")
         .arg("--data")
         .arg(root)
+        .arg("--after-update")
         .status()?;
     if !result.success() {
         return Err("macOS could not reopen Daybook".into());
@@ -514,6 +545,7 @@ pub fn run(root: &Path, fd: i32) -> Result<()> {
     match work(root) {
         Ok(()) => Ok(()),
         Err(e) => {
+            take_workspace(root, false);
             save(root, "failed", &format!("Update failed: {e}"))?;
             Err(e)
         }
@@ -538,8 +570,23 @@ mod tests {
         drop(l);
         assert!(!busy(&r));
         assert_eq!(status(&r, true)["phase"], "interrupted");
-        assert!(begin(&r, true).is_err());
+        assert!(begin(&r, true, None).is_err());
         fs::remove_dir_all(r).unwrap();
+    }
+    #[test]
+    fn workspace_is_only_restored_once_for_an_update_launch() {
+        let root = temp("workspace");
+        let dir = directory(&root);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("workspace.json");
+        let view = json!({"page":1,"filter":{"day":"2026-11-18"}});
+        fs::write(&path, view.to_string()).unwrap();
+        assert_eq!(take_workspace(&root, true), Some(view.clone()));
+        assert!(take_workspace(&root, true).is_none());
+        fs::write(&path, view.to_string()).unwrap();
+        assert!(take_workspace(&root, false).is_none());
+        assert!(!path.exists());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn no_restart_before_native_flush_and_transcription_finish() {

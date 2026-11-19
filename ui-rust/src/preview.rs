@@ -37,8 +37,156 @@ pub(super) fn fixture(tx: SyncSender<Request>, rx: Receiver<Reply>) -> Controls 
             }
         }
     }
+    columns_fixture(&mut c, false, false);
     // Keep the normal startup/jump behavior; previews must exercise the real reader.
     c
+}
+fn columns_fixture(c: &mut Controls, passive: bool, empty: bool) {
+    use crate::transcript_range::*;
+    let from = chrono::Local::now()
+        .date_naive()
+        .and_hms_opt(10, 14, 0)
+        .unwrap()
+        .and_local_timezone(chrono::Local)
+        .earliest()
+        .unwrap()
+        .timestamp();
+    let range = Span {
+        from,
+        until: from + 60,
+    };
+    let overview = Span {
+        from,
+        until: from + 600,
+    };
+    let passages = if empty {
+        vec![]
+    } else {
+        [(3,12,"transcript","remote","Did you record the ferry arriving?"),
+         (6,6,"screen","screenshot","Waterfront walk · Route map"),
+         (6,16,"screen","passive_screen","Waterfront walk"),
+         (9,18,"transcript","me","I was standing on the stone steps. You can hear the rigging before the boat comes into view."),
+         (20,26,"transcript","remote","Keep that quiet opening."),
+         (23,23,"note","clipboard","Saturday · second pass at the stone steps"),
+         (36,46,"transcript","me","I’ll bring the recorder back on Saturday and walk the route again."),
+         (40,50,"screen","passive_screen","Field recording · Saturday"),
+         (47,54,"transcript","remote","Let’s leave a little room for the sound of the water.")]
+        .into_iter().enumerate().filter_map(|(i,(a,b,k,s,t))|{
+          let lane=Lane::of(k,s)?;
+          if lane==Lane::System && passive || lane==Lane::Passive && !passive{return None}
+          Some(Passage{id:50+i as i64,at:from+a,end:from+b,kind:k.into(),source:s.into(),text:t.into(),image_id:(s=="screenshot").then_some(51),truncated:false})
+        }).collect::<Vec<_>>()
+    };
+    let mut nearby = passages.clone();
+    if !empty {
+        for (i, (t, k, src, text)) in [
+            (
+                78,
+                "transcript",
+                "me",
+                "The ferry timetable lists the Saturday crossing.",
+            ),
+            (
+                90,
+                "transcript",
+                "remote",
+                "Catch the bell as it leaves the waterfront.",
+            ),
+            (
+                144,
+                "screen",
+                "passive_screen",
+                "Saturday departures · Waterfront",
+            ),
+            (156, "note", "clipboard", "Ferry tickets · $125"),
+            (
+                190,
+                "transcript",
+                "me",
+                "The Market Street entrance is the second recording stop.",
+            ),
+            (
+                217,
+                "transcript",
+                "remote",
+                "Keep the market sounds separate from the ferry.",
+            ),
+            (
+                300,
+                "screen",
+                "screenshot",
+                "Market Street · recording locations",
+            ),
+            (
+                326,
+                "transcript",
+                "me",
+                "Saturday works for the last crossing.",
+            ),
+            (
+                385,
+                "transcript",
+                "remote",
+                "Ask for the ferry captain by name.",
+            ),
+            (450, "screen", "passive_screen", "Field Notes · Saturday"),
+            (
+                515,
+                "transcript",
+                "me",
+                "We can finish the route at the stone steps.",
+            ),
+            (
+                550,
+                "transcript",
+                "remote",
+                "Keep the waterfront version for the listening walk.",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let lane = Lane::of(k, src).unwrap();
+            if lane == Lane::Passive && !passive || lane == Lane::System && passive {
+                continue;
+            }
+            let end = t + if lane == Lane::Saves { 0 } else { 8 };
+            nearby.push(Passage {
+                id: 200 + i as i64,
+                at: from + t,
+                end: from + end,
+                kind: k.into(),
+                source: src.into(),
+                text: text.into(),
+                image_id: (src == "screenshot").then_some(200 + i as i64),
+                truncated: false,
+            });
+        }
+    }
+    let bands = nearby
+        .iter()
+        .map(|p| Cluster {
+            lane: p.lane(),
+            range: Span {
+                from: p.at,
+                until: p.end.max(p.at + 1),
+            },
+            count: 1,
+            excerpt: p.text.clone(),
+        })
+        .collect();
+    c.parallel.apply(Window {
+        range,
+        extent: overview,
+        overview,
+        bands,
+        nearby,
+        nearby_grouped: false,
+        passages,
+        clusters: vec![],
+        quiet_at: None,
+    });
+    c.reading.passive_screen = passive;
 }
 pub(super) fn archive_fixture(c: &mut Controls, selection: bool) {
     let day = chrono::Local::now().date_naive();
@@ -103,6 +251,23 @@ pub(super) fn run(path: std::path::PathBuf, args: &[String]) {
         enabled("--empty"),
         enabled("--night"),
     );
+    let passive = enabled("--passive");
+    let ten_minutes = enabled("--ten-minutes");
+    let fixture_dir = args
+        .iter()
+        .position(|s| s == "--fixture-dir")
+        .and_then(|i| args.get(i + 1));
+    let endpoint = fixture_dir.map(|dir| {
+        let url = std::fs::read_to_string(std::path::Path::new(dir).join("control-url.txt"))
+            .expect("synthetic journal address");
+        let url = url.trim();
+        assert!(
+            url.starts_with("http://127.0.0.1:")
+                && call(url, "/overview", None).is_ok_and(|v| v["synthetic"] == true),
+            "a synthetic local journal is required"
+        );
+        url.to_owned()
+    });
     let archive = enabled("--archive");
     let selection = enabled("--selection");
     let options = eframe::NativeOptions {
@@ -120,11 +285,25 @@ pub(super) fn run(path: std::path::PathBuf, args: &[String]) {
         "Daybook design preview",
         options,
         Box::new(move |cc| {
+            if let Some(base) = endpoint {
+                let mut c = Controls::new(cc, base);
+                if ten_minutes {
+                    c.parallel.seconds = 600;
+                }
+                c.focus = focus;
+                c.preview_output = Some(path);
+                return Ok(Box::new(c));
+            }
             design::setup(&cc.egui_ctx);
             let (tx, _requests) = mpsc::sync_channel(12);
             let (_replies, rx) = mpsc::sync_channel(12);
             let mut c = fixture(tx, rx);
             c.preview_output = Some(path);
+            columns_fixture(&mut c, passive, empty);
+            if ten_minutes {
+                let r = c.parallel.data.as_ref().unwrap().overview;
+                c.parallel.set_range(r);
+            }
             if archive {
                 archive_fixture(&mut c, selection);
             }

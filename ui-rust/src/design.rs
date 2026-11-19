@@ -178,6 +178,8 @@ pub enum Icon {
     Mic,
     System,
     Note,
+    Clipboard,
+    Photo,
     Focus,
     Lock,
     Book,
@@ -253,6 +255,17 @@ pub fn icon(p: &egui::Painter, center: Pos2, size: f32, glyph: Icon, color: Colo
             rect(2., 4., 20., 13., 2);
             line(&[(12., 17.), (12., 21.)]);
             line(&[(8., 21.), (16., 21.)]);
+        }
+        Icon::Clipboard => {
+            rect(5., 5., 14., 16., 2);
+            rect(9., 3., 6., 4., 1);
+            line(&[(8., 11.), (16., 11.)]);
+            line(&[(8., 15.), (14., 15.)]);
+        }
+        Icon::Photo => {
+            rect(2., 4., 20., 16., 2);
+            p.circle_filled(xy(8., 9.), size / 13., color);
+            line(&[(4., 17.), (10., 12.), (13., 15.), (17., 10.), (21., 14.)]);
         }
         Icon::Note => {
             line(&[

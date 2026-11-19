@@ -2,6 +2,7 @@ mod archive_image;
 mod config;
 mod inspect;
 mod live_audio;
+mod parallel;
 mod passive;
 mod provider;
 mod reading;
@@ -12,6 +13,7 @@ mod screen_sample;
 mod speech_file;
 mod store;
 mod streaming;
+mod transcript_range;
 mod update;
 mod voice;
 mod worker;
@@ -626,6 +628,9 @@ fn run() -> Result<()> {
                     return Ok(update::status(&root, synthetic).to_string());
                 }
                 "/timeline" => return Ok(inspect::timeline(&s, &v)?.to_string()),
+                "/transcript_window" => return Ok(parallel::window(&s, &v)?.to_string()),
+                "/transcript_passages" => return Ok(parallel::passages(&s, &v)?.to_string()),
+                "/copy_transcript" => return Ok(parallel::copy(&s, &v)?.to_string()),
                 "/copy_time_range" => return Ok(inspect::copy_time_range(&s, &v)?.to_string()),
                 "/transcript" => return Ok(inspect::transcript(&s, &v)?.to_string()),
                 "/inspect" => return Ok(inspect::inspect(&s, &v)?.to_string()),

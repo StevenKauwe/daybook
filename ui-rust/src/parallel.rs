@@ -1,0 +1,892 @@
+//! The time-aligned reader owns its selected window independently of live transcription.
+use super::*;
+use crate::transcript_range::*;
+use chrono::{Local, NaiveDateTime, NaiveTime, TimeZone};
+use std::sync::Arc;
+
+pub(super) fn clock(at: i64, fmt: &str) -> String {
+    chrono::DateTime::from_timestamp(at, 0)
+        .map(|d| d.with_timezone(&Local).format(fmt).to_string())
+        .unwrap_or_default()
+}
+fn time_input(s: &str, at: i64) -> Option<i64> {
+    let date = chrono::DateTime::from_timestamp(at, 0)?
+        .with_timezone(&Local)
+        .date_naive();
+    let full = NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok();
+    let local = full.or_else(|| {
+        ["%H:%M:%S", "%H:%M"]
+            .iter()
+            .find_map(|fmt| NaiveTime::parse_from_str(s.trim(), fmt).ok())
+            .map(|t| date.and_time(t))
+    })?;
+    Local
+        .from_local_datetime(&local)
+        .earliest()
+        .map(|d| d.timestamp())
+}
+pub(super) struct Detail {
+    pub lane: Lane,
+    pub bucket: Span,
+    pub range: Span,
+    pub passive: bool,
+    pub items: Vec<Passage>,
+    pub more: bool,
+    pub request: Option<Value>,
+}
+pub(super) struct Brush {
+    pub original: Span,
+    pub anchor: i64,
+    pub edge: u8,
+    pub domain: Arc<Window>,
+}
+pub(super) struct Timeline {
+    pub data: Option<Arc<Window>>,
+    pub day: Option<String>,
+    pub fixed: Option<Span>,
+    pub seconds: i64,
+    pending: Option<Value>,
+    loaded: Value,
+    checked: Option<Instant>,
+    pub picks: Picks,
+    pub marks: std::collections::BTreeMap<i64, (Lane, i64, i64)>,
+    from: String,
+    until: String,
+    editing: bool,
+    pub drag_start: Option<(i64, usize, egui::Id)>,
+    pub detail: Option<Detail>,
+    pub clipboard: Option<String>,
+    copying: bool,
+    preview_copy: bool,
+    copy_text: Option<String>,
+    receipt: String,
+    pub held: Option<Arc<Window>>,
+    pub overview_drag: Option<Brush>,
+}
+impl Default for Timeline {
+    fn default() -> Self {
+        Self {
+            data: None,
+            day: None,
+            fixed: None,
+            seconds: 60,
+            pending: None,
+            loaded: Value::Null,
+            checked: None,
+            picks: Default::default(),
+            marks: Default::default(),
+            from: String::new(),
+            until: String::new(),
+            editing: false,
+            drag_start: None,
+            detail: None,
+            clipboard: None,
+            copying: false,
+            preview_copy: false,
+            copy_text: None,
+            receipt: String::new(),
+            held: None,
+            overview_drag: None,
+        }
+    }
+}
+impl Timeline {
+    pub fn mark(&mut self, id: i64, lane: Lane, at: i64, end: i64, choice: Pick) {
+        self.marks.insert(id, (lane, at, end));
+        self.picks.entries.insert(id, choice);
+    }
+    pub fn marked(&self, r: Span, lane: Lane) -> bool {
+        self.marks.iter().any(|(id, (l, at, end))| {
+            *l == lane
+                && *at < r.until
+                && (*at >= r.from || *end > r.from || lane == Lane::Passive && *end == r.from)
+                && self.picks.entries.get(id).is_some_and(|p| *p != Pick::Skip)
+        })
+    }
+    pub fn clear_picks(&mut self) {
+        self.picks = Default::default();
+        self.marks.clear();
+    }
+    fn query(&self, passive: bool) -> Value {
+        json!({"range":self.fixed,"seconds":self.seconds,"passive":passive})
+    }
+    fn fields(&mut self, r: Span) {
+        self.day = Some(clock(r.until - 1, "%Y-%m-%d"));
+        let fmt = if clock(r.from, "%F") == clock(r.until, "%F") {
+            "%H:%M:%S"
+        } else {
+            "%F %H:%M:%S"
+        };
+        self.from = clock(r.from, fmt);
+        self.until = clock(r.until, fmt);
+    }
+    pub fn apply(&mut self, data: Window) {
+        if !self.editing {
+            self.fields(data.range);
+        }
+        if self.overview_drag.is_none() {
+            self.held = None;
+        }
+        self.data = Some(Arc::new(data));
+    }
+    pub fn set_range(&mut self, r: Span) {
+        if !r.valid() {
+            return;
+        }
+        self.fixed = Some(r);
+        self.seconds = r.len();
+        self.editing = false;
+        self.detail = None;
+        self.fields(r);
+        self.receipt.clear();
+    }
+    pub fn display(&self, passive: bool) -> Option<Arc<Window>> {
+        let last = self.data.as_ref()?;
+        let range = self.fixed.unwrap_or(last.range);
+        if last.range == range && (self.loaded.is_null() || self.loaded["passive"] == passive) {
+            return Some(last.clone());
+        }
+        let source = self
+            .overview_drag
+            .as_ref()
+            .map(|d| &d.domain)
+            .or(self.held.as_ref())
+            .unwrap_or(last);
+        let middle = if passive { Lane::Passive } else { Lane::System };
+        let allowed = |lane| lane == Lane::Mic || lane == Lane::Saves || lane == middle;
+        let within = range.from >= source.range.from && range.until <= source.range.until;
+        let exact = within && source.clusters.is_empty();
+        let contained = |p: &&Passage| {
+            allowed(p.lane())
+                && p.at < range.until
+                && (p.at >= range.from
+                    || p.end > range.from
+                    || p.lane() == Lane::Passive && p.end == range.from)
+        };
+        let rows = if exact || source.overview == source.range {
+            &source.passages
+        } else {
+            &source.nearby
+        };
+        let passages = rows.iter().filter(contained).cloned().collect();
+        let groups = if within && !source.clusters.is_empty() {
+            source.clusters.as_slice()
+        } else if source.nearby_grouped {
+            source.bands.as_slice()
+        } else {
+            &[]
+        };
+        let clusters = groups
+            .iter()
+            .filter(|g| allowed(g.lane) && g.range.from < range.until && g.range.until > range.from)
+            .map(|g| {
+                let mut g = g.clone();
+                g.range.from = g.range.from.max(range.from);
+                g.range.until = g.range.until.min(range.until);
+                g
+            })
+            .collect();
+        Some(Arc::new(Window {
+            range,
+            extent: source.extent,
+            overview: source.overview,
+            bands: vec![],
+            passages,
+            clusters,
+            nearby: vec![],
+            nearby_grouped: false,
+            quiet_at: source
+                .quiet_at
+                .filter(|t| (range.from..range.until).contains(t)),
+        }))
+    }
+    pub fn pin(&mut self, r: Span) {
+        self.editing = false;
+        if self.fixed.is_none() {
+            self.fixed = Some(r);
+            self.seconds = r.len();
+        }
+    }
+}
+impl Controls {
+    fn ask_window(&mut self) {
+        if self.base.starts_with("synthetic://") || self.parallel.pending.is_some() {
+            return;
+        }
+        let body = self.parallel.query(self.reading.passive_screen);
+        let historical = self
+            .parallel
+            .fixed
+            .is_some_and(|r| r.until < chrono::Utc::now().timestamp() - 90 || r.len() > 86400);
+        if self.parallel.overview_drag.is_some()
+            && self
+                .parallel
+                .checked
+                .is_some_and(|t| t.elapsed() < Duration::from_millis(90))
+        {
+            return;
+        }
+        let refresh = if historical {
+            30
+        } else if self.status["active"] == "true" {
+            1
+        } else {
+            4
+        };
+        if self.parallel.loaded == body
+            && self
+                .parallel
+                .checked
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(refresh))
+        {
+            return;
+        }
+        if self.send("/transcript_window", Some(body.clone())) {
+            self.parallel.pending = Some(body);
+            self.parallel.checked = Some(Instant::now());
+        }
+    }
+    pub(super) fn parallel_reply(&mut self, r: Reply) {
+        if r.path == "/transcript_window" {
+            self.parallel.pending = None;
+            if r.body.as_ref() != Some(&self.parallel.query(self.reading.passive_screen)) {
+                return;
+            }
+            self.parallel.loaded = r.body.unwrap_or(Value::Null);
+            match r
+                .result
+                .and_then(|v| serde_json::from_value::<Window>(v).map_err(|e| e.to_string()))
+            {
+                Ok(data) => self.parallel.apply(data),
+                Err(e) => self.error = e,
+            }
+        } else if r.path == "/transcript_passages" {
+            let Some(detail) = &mut self.parallel.detail else {
+                return;
+            };
+            if detail.request.is_none() || r.body != detail.request {
+                return;
+            }
+            detail.request = None;
+            match r.result.and_then(|v| {
+                let items = serde_json::from_value::<Vec<Passage>>(v["items"].clone())
+                    .map_err(|e| e.to_string())?;
+                Ok((items, v["more"] == true))
+            }) {
+                Ok((items, more)) => {
+                    detail.items.extend(items);
+                    detail.more = more
+                }
+                Err(e) => self.error = e,
+            }
+        } else {
+            self.parallel.copying = false;
+            let preview = std::mem::take(&mut self.parallel.preview_copy);
+            match r.result {
+                Ok(v) => {
+                    let text = v["text"].as_str().map(str::to_owned);
+                    if preview {
+                        self.parallel.copy_text = text;
+                        return;
+                    }
+                    self.parallel.clipboard = text;
+                    self.parallel.receipt = format!(
+                        "Copied {} {}",
+                        v["count"],
+                        if v["count"] == 1 {
+                            "passage"
+                        } else {
+                            "passages"
+                        }
+                    );
+                }
+                Err(e) => self.error = e,
+            }
+        }
+    }
+    pub(super) fn copy_parallel(&mut self, r: Span, lane: Option<Lane>, selected: bool) {
+        self.parallel.pin(r);
+        if self.base.starts_with("synthetic://") || self.parallel.copying {
+            return;
+        }
+        let mut body = json!({"range":r,"lane":lane,"passive":self.reading.passive_screen,"selected":selected});
+        if selected {
+            body["picks"] = json!(self.parallel.picks);
+        }
+        self.parallel.copying = self.send("/copy_transcript", Some(body));
+    }
+    pub(super) fn details_at(&mut self, r: Span, bucket: Span, lane: Lane) {
+        self.parallel.pin(r);
+        self.parallel.detail = Some(Detail {
+            lane,
+            bucket,
+            range: r,
+            passive: self.reading.passive_screen,
+            items: vec![],
+            more: true,
+            request: None,
+        });
+        self.next_detail();
+    }
+    fn next_detail(&mut self) {
+        let Some(d) = &self.parallel.detail else {
+            return;
+        };
+        if d.request.is_some() || !d.more {
+            return;
+        }
+        let mut b = json!({"range":d.range,"bucket":d.bucket,"lane":d.lane,"passive":d.passive});
+        if let Some(p) = d.items.last() {
+            b["after_at"] = json!(p.at);
+            b["after_id"] = json!(p.id);
+        }
+        if self.base.starts_with("synthetic://") {
+            let rows = self
+                .parallel
+                .data
+                .as_ref()
+                .map(|w| {
+                    w.nearby
+                        .iter()
+                        .chain(
+                            w.passages
+                                .iter()
+                                .filter(|p| !w.nearby.iter().any(|q| q.id == p.id)),
+                        )
+                        .filter(|p| {
+                            p.lane() == d.lane
+                                && (d.bucket.from..d.bucket.until).contains(&p.at.max(d.range.from))
+                        })
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            let d = self.parallel.detail.as_mut().unwrap();
+            d.items = rows;
+            d.more = false;
+            return;
+        }
+        if self.send("/transcript_passages", Some(b.clone())) {
+            self.parallel.detail.as_mut().unwrap().request = Some(b);
+        }
+    }
+    fn detail_window(&mut self, ctx: &egui::Context) {
+        let Some(d) = &self.parallel.detail else {
+            return;
+        };
+        let (lane, range, bucket) = (d.lane, d.range, d.bucket);
+        let items = d.items.clone();
+        let more = d.more;
+        let busy = d.request.is_some();
+        let mut open = true;
+        egui::Window::new(format!(
+            "{} · {}",
+            lane.label(),
+            clock(bucket.from, "%H:%M:%S")
+        ))
+        .id(egui::Id::new("parallel-detail"))
+        .open(&mut open)
+        .default_width(510.)
+        .max_height(480.)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Zoom here").clicked() {
+                    self.parallel.set_range(bucket);
+                }
+                if ui.button("Close").clicked() {
+                    self.parallel.detail = None;
+                }
+            });
+            egui::ScrollArea::vertical()
+                .id_salt(("parallel-full", bucket.from, lane as u8))
+                .show(ui, |ui| {
+                    let mut hits = vec![];
+                    for p in &items {
+                        let color = design::paper(self.reading.night).ink;
+                        let text =
+                            self.passage_layout(ui, p, 16., ui.available_width() - 34., color);
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), text.size().y.max(24.) + 8.),
+                            egui::Sense::hover(),
+                        );
+                        self.paint_passage(ui, rect, text, p, range, &mut hits);
+                        if p.truncated && ui.small_button("Read full passage").clicked() {
+                            self.inspect("observation", p.id, None);
+                            self.parallel.detail = None;
+                        }
+                    }
+                    self.word_drag(ui, range, &hits);
+                    if busy {
+                        ui.spinner();
+                    } else if more && ui.button("More passages").clicked() {
+                        self.next_detail();
+                    }
+                });
+        });
+        if !open {
+            self.parallel.detail = None;
+        }
+    }
+    fn parallel_tools(&mut self, ui: &mut egui::Ui) {
+        let style = self.reading;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Alongside microphone").size(13.));
+            ui.selectable_value(&mut self.reading.passive_screen, false, "System audio");
+            ui.selectable_value(
+                &mut self.reading.passive_screen,
+                true,
+                "Passive screen text",
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button(if self.focus { "Exit focus" } else { "Focus" })
+                    .clicked()
+                {
+                    self.focus = !self.focus;
+                }
+                ui.menu_button("Reading", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Text size");
+                        ui.add(
+                            egui::DragValue::new(&mut self.reading.size)
+                                .range(16..=33)
+                                .suffix(" pt"),
+                        );
+                    });
+                    ui.checkbox(&mut self.reading.journal, "Journal serif");
+                    ui.checkbox(&mut self.reading.night, "Night paper");
+                    if ui.button("Paragraph view").clicked() {
+                        self.paragraph_view = true;
+                        self.follow_stream();
+                        ui.close();
+                    }
+                });
+                ui.menu_button("Inputs", |ui| {
+                    ui.set_min_width(360.);
+                    self.input_strip(ui, self.fresh());
+                });
+                if ui.small_button("Quick note").clicked() {
+                    self.open_note();
+                }
+            });
+        });
+        if style != self.reading {
+            if style.passive_screen != self.reading.passive_screen {
+                self.parallel.detail = None;
+                if self.status["active"] != "true"
+                    && self.parallel.fixed.is_none()
+                    && let Some(w) = &self.parallel.data
+                    && (!w.passages.is_empty() || !w.clusters.is_empty())
+                {
+                    self.parallel.fixed = Some(w.range);
+                }
+            }
+            if !self.base.starts_with("synthetic://") {
+                self.send("/reading", Some(json!(self.reading)));
+            }
+        }
+    }
+    fn parallel_range(&mut self, ui: &mut egui::Ui, w: &Window) {
+        let r = self.parallel.fixed.unwrap_or(w.range);
+        ui.horizontal_wrapped(|ui| {
+            let mut submit = false;
+            for start in [true, false] {
+                ui.label(if start { "From" } else { "Until" });
+                let field = if start {
+                    &mut self.parallel.from
+                } else {
+                    &mut self.parallel.until
+                };
+                let width = if field.len() > 9 { 162. } else { 81. };
+                let edit = ui
+                    .add(
+                        egui::TextEdit::singleline(field)
+                            .id(egui::Id::new(("parallel-time-field", start)))
+                            .desired_width(width)
+                            .font(egui::TextStyle::Monospace),
+                    )
+                    .on_hover_text("Local time or YYYY-MM-DD HH:MM:SS");
+                if edit.has_focus() || edit.changed() {
+                    self.parallel.editing = true;
+                }
+                submit |= edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            }
+            if self.parallel.editing && (ui.small_button("Apply").clicked() || submit) {
+                if let (Some(a), Some(b)) = (
+                    time_input(&self.parallel.from, r.from),
+                    time_input(&self.parallel.until, r.until),
+                ) {
+                    if (Span { from: a, until: b }).valid() {
+                        self.parallel.set_range(Span { from: a, until: b });
+                        self.error.clear();
+                    } else {
+                        self.error = "Until must be later than From.".into();
+                    }
+                } else {
+                    self.error = "Enter a time such as 10:14:00 or a date and time.".into();
+                }
+            }
+            ui.add_space(5.);
+            for (label, seconds) in [
+                ("−", r.len().saturating_mul(2)),
+                ("30 sec", 30),
+                ("1 min", 60),
+                ("5 min", 300),
+                ("10 min", 600),
+                ("+", (r.len() / 2).max(1)),
+            ] {
+                if ui
+                    .selectable_label(r.len() == seconds && !["−", "+"].contains(&label), label)
+                    .clicked()
+                {
+                    self.parallel.set_range(Span::ending(r.until, seconds));
+                }
+            }
+            if ui
+                .small_button("‹")
+                .on_hover_text("Previous time window")
+                .clicked()
+            {
+                self.parallel.set_range(Span::ending(r.from, r.len()));
+            }
+            if ui
+                .small_button("›")
+                .on_hover_text("Next time window")
+                .clicked()
+            {
+                self.parallel
+                    .set_range(Span::ending(r.until + r.len(), r.len()));
+            }
+            if ui
+                .small_button(if self.parallel.fixed.is_some() {
+                    "Latest"
+                } else {
+                    "Following latest"
+                })
+                .on_hover_text("Follow the latest activity")
+                .clicked()
+            {
+                self.parallel.fixed = None;
+                self.parallel.editing = false;
+                self.parallel.detail = None;
+                self.parallel.clear_picks();
+                self.parallel.checked = None;
+            }
+        });
+        self.overview_ruler(ui, w);
+    }
+    pub(super) fn parallel_transcript(&mut self, ui: &mut egui::Ui) {
+        self.parallel_tools(ui);
+        let Some(source) = self
+            .parallel
+            .overview_drag
+            .as_ref()
+            .map(|d| d.domain.clone())
+            .or_else(|| self.parallel.data.clone())
+        else {
+            self.ask_window();
+            ui.spinner();
+            ui.label("Opening your transcript…");
+            return;
+        };
+        self.parallel_range(ui, &source);
+        self.ask_window();
+        let w = self
+            .parallel
+            .display(self.reading.passive_screen)
+            .expect("source is loaded");
+        let current = self.base.starts_with("synthetic://")
+            || self.parallel.loaded == self.parallel.query(self.reading.passive_screen);
+        // A copy always queries the exact visible bounds, even while the canvas is drawing from the nearby cache.
+        let paper = design::paper(self.reading.night);
+        egui::Frame::new()
+            .fill(paper.sheet)
+            .stroke(egui::Stroke::new(1., paper.line))
+            .corner_radius(10)
+            .inner_margin(10)
+            .show(ui, |ui| self.draw_columns(ui, &w));
+        let has = !w.passages.is_empty() || !w.clusters.is_empty();
+        ui.horizontal_wrapped(|ui| {
+            let picked = self.has_visible_picks(&w);
+            let copy = egui::Button::new(RichText::new("Copy conversation").color(CARD)).fill(MINT);
+            if ui
+                .add_enabled((has || !current) && !self.parallel.copying, copy)
+                .clicked()
+            {
+                self.copy_parallel(w.range, None, false);
+            }
+            if picked && ui.button("Copy selected").clicked() {
+                self.copy_parallel(w.range, None, true);
+            }
+            let preview = egui::Button::new("Preview copy").frame(false);
+            if ui
+                .add_enabled(has && !self.parallel.copying, preview)
+                .clicked()
+            {
+                self.parallel.preview_copy = true;
+                self.copy_parallel(w.range, None, picked);
+            }
+            let editing_time = ui.memory(|m| {
+                [true, false]
+                    .iter()
+                    .any(|k| m.has_focus(egui::Id::new(("parallel-time-field", *k))))
+            });
+            if picked
+                && !editing_time
+                && !self.note_open
+                && self.detail_request.is_null()
+                && self.parallel.copy_text.is_none()
+                && !self.parallel.copying
+                && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+            {
+                self.copy_parallel(w.range, None, true);
+            }
+            if picked && ui.small_button("Clear selection").clicked() {
+                self.parallel.clear_picks();
+            }
+            if !self.parallel.receipt.is_empty() {
+                muted(ui, self.parallel.receipt.clone());
+            }
+            if ui.link("Browse archive →").clicked() {
+                self.navigate(1);
+            }
+        });
+        let recording_issue = self.status["active"] == "true"
+            || self.status["armed"] == "true"
+            || self.status["capture_starting"] == "true"
+            || self.status["status"]
+                .as_str()
+                .is_some_and(|s| s.starts_with("error:"));
+        let blocker = self.status["health"]["speech_blocker"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                self.status["health"]["loaded_speech_model"]["error"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+            });
+        if let Some(issue) = blocker.filter(|_| recording_issue || !has) {
+            ui.colored_label(paper.fault, issue);
+        } else if let Some(at) = w.quiet_at {
+            muted(
+                ui,
+                format!(
+                    "Audio received at {} · No speech transcribed there yet.",
+                    clock(at, "%H:%M:%S")
+                ),
+            );
+        } else if has {
+            muted(
+                ui,
+                "Click a passage to select it, or drag across words. A column heading selects the whole column.",
+            );
+        }
+        self.detail_window(ui.ctx());
+        if let Some(text) = &self.parallel.copy_text {
+            let mut open = true;
+            egui::Window::new("Copy preview")
+                .default_width(550.)
+                .open(&mut open)
+                .show(ui.ctx(), |ui| {
+                    if ui.button("Copy to clipboard").clicked() {
+                        ui.ctx().copy_text(text.clone());
+                    }
+                    egui::ScrollArea::vertical()
+                        .max_height(370.)
+                        .show(ui, |ui| {
+                            ui.add(egui::Label::new(text).selectable(true));
+                        });
+                });
+            if !open {
+                self.parallel.copy_text = None;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn setup() -> (Controls, egui::Context, Receiver<Request>) {
+        let (tx, requests) = std::sync::mpsc::sync_channel(32);
+        let (_, rx) = std::sync::mpsc::sync_channel(32);
+        let c = crate::preview::fixture(tx, rx);
+        let ctx = egui::Context::default();
+        design::setup(&ctx);
+        (c, ctx, requests)
+    }
+    fn frame(
+        ctx: &egui::Context,
+        c: &mut Controls,
+        events: Vec<egui::Event>,
+    ) -> Vec<(String, f32)> {
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1040., 790.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| c.parallel_transcript(ui),
+        );
+        let mut labels = vec![];
+        for s in &out.shapes {
+            if let egui::Shape::Text(t) = &s.shape {
+                if !s
+                    .clip_rect
+                    .intersects(t.galley.rect.translate(t.pos.to_vec2()))
+                {
+                    continue;
+                }
+                for section in &t.galley.job.sections {
+                    labels.push((
+                        t.galley.job.text[section.byte_range.start.0..section.byte_range.end.0]
+                            .to_owned(),
+                        section.format.font_id.size,
+                    ));
+                }
+            }
+        }
+        out.drop_without_applying_deltas();
+        labels
+    }
+    fn press(p: egui::Pos2, down: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed: down,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+    #[test]
+    fn dragging_repositions_and_loads_the_columns_before_the_mouse_is_released() {
+        let (mut c, ctx, _) = setup();
+        for _ in 0..3 {
+            frame(&ctx, &mut c, vec![]);
+        }
+        let from = c.parallel.data.as_ref().unwrap().overview.from;
+        let rect = ctx
+            .read_response(egui::Id::new("parallel-time-ruler"))
+            .unwrap()
+            .rect;
+        let point = |t: f32| egui::pos2(rect.left() + rect.width() * (t / 600.), rect.center().y);
+        frame(
+            &ctx,
+            &mut c,
+            vec![
+                egui::Event::PointerMoved(point(70.)),
+                press(point(70.), true),
+            ],
+        );
+        let first = frame(&ctx, &mut c, vec![egui::Event::PointerMoved(point(170.))]);
+        assert_eq!(
+            c.parallel.fixed,
+            Some(Span {
+                from: from + 70,
+                until: from + 170
+            })
+        );
+        assert!(c.parallel.overview_drag.is_some());
+        assert!(
+            first.iter().any(|(s, _)| s.contains("ferry timetable")),
+            "first drag must show neighboring words immediately"
+        );
+        assert!(first.iter().all(|(s, _)| !s.contains("Did you record")));
+        let next = frame(&ctx, &mut c, vec![egui::Event::PointerMoved(point(209.))]);
+        assert_eq!(c.parallel.fixed.unwrap().until, from + 209);
+        assert!(
+            next.iter().any(|(s, _)| s.contains("Market Street")),
+            "second move must reveal another passage before mouseup"
+        );
+        frame(&ctx, &mut c, vec![press(point(209.), false)]);
+        assert!(c.parallel.overview_drag.is_none());
+        assert_eq!(c.parallel.until, clock(from + 209, "%H:%M:%S"));
+        // A second drag resizes the existing selection using its handle.
+        frame(
+            &ctx,
+            &mut c,
+            vec![
+                egui::Event::PointerMoved(point(70.)),
+                press(point(70.), true),
+            ],
+        );
+        frame(&ctx, &mut c, vec![egui::Event::PointerMoved(point(100.))]);
+        assert_eq!(
+            c.parallel.fixed,
+            Some(Span {
+                from: from + 100,
+                until: from + 209
+            })
+        );
+    }
+    #[test]
+    fn folded_original_words_stay_readable_and_open_at_their_time() {
+        let (mut c, ctx, _) = setup();
+        let overview = c.parallel.data.as_ref().unwrap().overview;
+        c.parallel.set_range(overview);
+        let mut labels = vec![];
+        for _ in 0..3 {
+            labels = frame(&ctx, &mut c, vec![]);
+        }
+        assert!(
+            labels.iter().any(|(s, size)| s == "$125" && *size >= 14.),
+            "a literal price should stay readable at 10 minutes"
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|(s, size)| s.contains("Ferry tickets") && *size < 10.)
+        );
+        let range = Span {
+            from: overview.from + 156,
+            until: overview.from + 157,
+        };
+        let row = ctx
+            .read_response(egui::Id::new((
+                "parallel-unfold",
+                Lane::Saves as u8,
+                range.from,
+            )))
+            .unwrap()
+            .rect;
+        let p = row.left_center() + egui::vec2(22., 0.);
+        frame(
+            &ctx,
+            &mut c,
+            vec![egui::Event::PointerMoved(p), press(p, true)],
+        );
+        frame(&ctx, &mut c, vec![press(p, false)]);
+        assert_eq!(c.parallel.detail.as_ref().unwrap().bucket, range);
+        assert_eq!(
+            c.parallel.detail.as_ref().unwrap().items[0].body(),
+            "Ferry tickets · $125"
+        );
+    }
+    #[test]
+    fn late_window_responses_never_change_the_final_range_or_copy_request() {
+        let (mut c, _ctx, requests) = setup();
+        c.base = "test://local-api".into();
+        c.ask_window();
+        let old = requests.try_recv().unwrap();
+        let window = c.parallel.data.as_ref().unwrap().clone();
+        let selected = Span {
+            from: window.range.from + 9,
+            until: window.range.from + 22,
+        };
+        c.parallel.set_range(selected);
+        c.parallel_reply(Reply {
+            path: old.path,
+            body: old.body,
+            result: Ok(json!(&*window)),
+        });
+        c.ask_window();
+        let fresh = requests.try_recv().unwrap();
+        assert_eq!(fresh.body.unwrap()["range"], json!(selected));
+        c.copy_parallel(selected, Some(Lane::Saves), false);
+        let copy = requests.try_recv().unwrap();
+        assert_eq!(copy.path, "/copy_transcript");
+        assert_eq!(copy.body.unwrap()["range"], json!(selected));
+    }
+}

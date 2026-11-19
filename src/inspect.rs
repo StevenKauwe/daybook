@@ -293,7 +293,7 @@ impl<'a> ArchiveQuery<'a> {
 // Timestamped passages can straddle the start of a selected range. Ordinary day browsing
 // keeps the existing source-date convention and its indexed range scan.
 const DAY_ENTRIES: &str = "journal_entries WHERE at>=?1 AND at<?2";
-const RANGE_ENTRIES: &str = "(SELECT * FROM journal_entries WHERE at>=?1 AND at<?2
+pub(crate) const RANGE_ENTRIES: &str = "(SELECT * FROM journal_entries WHERE at>=?1 AND at<?2
     UNION ALL SELECT * FROM journal_entries WHERE at<?1 AND end_at>=?1 AND end_at>at AND (end_at>?1 OR source='passive_screen')) WHERE 1";
 const MATCH_ENTRY: &str =
     "((?3='all' AND kind IN ('transcript','preview','note','screen')) OR kind=?3)

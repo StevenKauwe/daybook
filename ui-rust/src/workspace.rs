@@ -86,7 +86,10 @@ impl Controls {
         let stop =
             active || self.status["armed"] == "true" || self.status["capture_starting"] == "true";
         let date = if self.tab == 0 {
-            self.stream_page["day"].as_str()
+            self.parallel
+                .day
+                .as_deref()
+                .or(self.stream_page["day"].as_str())
         } else if matches!(self.tab, 1 | 2) {
             Some(self.day.as_str())
         } else {
@@ -104,9 +107,13 @@ impl Controls {
                 ui.spacing_mut().item_spacing.y = 1.;
                 ui.label(RichText::new(date).size(13.).color(colors.muted));
                 ui.label(
-                    RichText::new(PAGES[self.tab].1)
-                        .font(design::serif(43.))
-                        .color(colors.ink),
+                    RichText::new(if self.tab == 0 && !self.paragraph_view {
+                        "Parallel transcript"
+                    } else {
+                        PAGES[self.tab].1
+                    })
+                    .font(design::serif(if self.tab == 0 { 35. } else { 43. }))
+                    .color(colors.ink),
                 );
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -351,7 +358,7 @@ impl Controls {
             ui.ctx().set_theme(theme);
             ui.ctx().request_repaint();
         }
-        let compact = ui.available_width() < 990.;
+        let compact = self.tab == 0 || ui.available_width() < 990.;
         if !self.focus {
             egui::Panel::left("binder_spine")
                 .exact_size(if compact { 70. } else { 190. })
@@ -394,11 +401,17 @@ impl Controls {
                     return;
                 }
                 if self.tab == 0 {
-                    if !self.focus {
-                        self.input_strip(ui, self.fresh());
-                        ui.add_space(6.);
+                    if self.paragraph_view {
+                        if ui.link("Time-aligned columns").clicked() {
+                            self.paragraph_view = false;
+                        }
+                        if !self.focus {
+                            self.input_strip(ui, self.fresh());
+                        }
+                        self.stream(ui);
+                    } else {
+                        self.parallel_transcript(ui);
                     }
-                    self.stream(ui);
                 } else {
                     let (divider, _) = ui.allocate_exact_size(
                         egui::vec2(ui.available_width(), 1.),

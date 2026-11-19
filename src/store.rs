@@ -39,6 +39,7 @@ impl Store {
  CREATE INDEX IF NOT EXISTS obs_pending_ocr ON observations(id) WHERE kind='screen' AND json_extract(details,'$.ocr_status')='pending';
  CREATE INDEX IF NOT EXISTS obs_live ON observations(source,id DESC) WHERE kind IN ('preview','transcript');
  CREATE INDEX IF NOT EXISTS obs_transcript_at ON observations(at,id) WHERE kind IN ('preview','transcript');
+ CREATE INDEX IF NOT EXISTS sources_end_time ON sources(end_at);
  CREATE INDEX IF NOT EXISTS source_speech_gate ON source_metadata(json_extract(details,'$.speech_gate'));")?;
         let has_reported:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('provider_daily') WHERE name='reported_calls')",[],|r|r.get(0))?;
         if !has_reported {

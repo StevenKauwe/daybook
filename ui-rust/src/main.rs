@@ -18,8 +18,11 @@ use std::{
 };
 mod archive;
 mod design;
+mod keywords;
 mod live;
 mod meters;
+mod parallel;
+mod parallel_canvas;
 #[allow(unsafe_code)]
 mod paste;
 mod perf;
@@ -28,6 +31,8 @@ mod preview;
 #[path = "../../src/reading.rs"]
 mod reading;
 mod scope;
+#[path = "../../src/transcript_range.rs"]
+mod transcript_range;
 mod workspace;
 use design::{CARD, CORAL, MINT, MUTED};
 struct Request {
@@ -73,7 +78,7 @@ fn call_with(
             );
         }
     };
-    let limit = if path == "/copy_time_range" {
+    let limit = if matches!(path, "/copy_time_range" | "/copy_transcript") {
         13 * 1024 * 1024
     } else {
         4 * 1024 * 1024
@@ -235,6 +240,8 @@ struct Controls {
     quitting: bool,
     stream_page: Value,
     reader: live::Reader,
+    parallel: parallel::Timeline,
+    paragraph_view: bool,
     reading: reading::ReadingStyle,
     detailed_poll: std::sync::Arc<std::sync::atomic::AtomicBool>,
     minimized: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -413,6 +420,8 @@ impl Controls {
             quitting: false,
             stream_page: Value::Null,
             reader: Default::default(),
+            parallel: Default::default(),
+            paragraph_view: false,
             reading: Default::default(),
             detailed_poll: Default::default(),
             minimized: Default::default(),
@@ -451,6 +460,9 @@ impl Controls {
     fn command(&mut self, c: &str) {
         if self.send("/command", Some(json!({"command":c}))) {
             if c == "start" {
+                self.parallel.fixed = None;
+                self.parallel.clear_picks();
+                self.parallel.detail = None;
                 self.tab = 0;
                 self.follow_stream();
             }
@@ -676,6 +688,13 @@ impl Controls {
             }
             if r.path == "/note" {
                 self.saving_note = false;
+            }
+            if matches!(
+                r.path.as_str(),
+                "/transcript_window" | "/transcript_passages" | "/copy_transcript"
+            ) {
+                self.parallel_reply(r);
+                continue;
             }
             match r.result {
                 Err(e) => {
@@ -1751,7 +1770,7 @@ impl Controls {
             return;
         }
         let view = json!({"page":self.tab,"settings":self.settings_tab,"health":self.health_tab,
-            "filter":self.filter(),"focus":self.focus});
+            "filter":self.filter(),"focus":self.focus,"transcript_range":self.parallel.fixed,"transcript_seconds":self.parallel.seconds,"paragraph_view":self.paragraph_view});
         if self.send("/update", Some(json!({"draft":self.note,"workspace":view}))) {
             self.error.clear();
             self.update_pending = true;
@@ -1775,6 +1794,18 @@ impl Controls {
                 self.source = f["source"].as_str().unwrap_or("all").into();
                 self.query = f["query"].as_str().unwrap_or("").into();
                 self.archive.restore_filter(f, &self.query);
+            }
+        }
+        if page == 0 {
+            self.paragraph_view = view["paragraph_view"] == true;
+            if let Some(seconds) = view["transcript_seconds"].as_i64() {
+                self.parallel.seconds =
+                    seconds.clamp(1, transcript_range::MAX_TIME - transcript_range::MIN_TIME);
+            }
+            if let Ok(r) =
+                serde_json::from_value::<transcript_range::Span>(view["transcript_range"].clone())
+            {
+                self.parallel.set_range(r);
             }
         }
         self.navigate(page as usize);
@@ -2161,6 +2192,11 @@ impl eframe::App for Controls {
                 self.begin_paste(version);
             }
         }
+        let fixture_api = self.preview_output.is_some() && !self.base.starts_with("synthetic://");
+        if fixture_api {
+            self.poll();
+            self.picture.poll(ctx);
+        }
         if let Some(path) = &self.preview_output {
             self.preview_frames += 1;
             if self.preview_motion {
@@ -2174,6 +2210,7 @@ impl eframe::App for Controls {
                 }
             }
             if self.preview_frames % 10 == 4
+                && (!fixture_api || self.parallel.data.is_some())
                 && (!self.preview_motion || self.preview_timing.len() >= 180)
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
@@ -2218,6 +2255,9 @@ impl eframe::App for Controls {
             return;
         }
         self.poll();
+        if let Some(text) = self.parallel.clipboard.take() {
+            ctx.copy_text(text);
+        }
         self.picture.poll(ctx);
         self.archive.flush_clipboard(ctx);
         let hidden = ctx.input(|i| i.viewport().minimized.unwrap_or(false));

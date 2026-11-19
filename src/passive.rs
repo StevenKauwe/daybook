@@ -14,6 +14,26 @@ pub struct Tracker {
     visible: HashMap<String, i64>,
     layout: Option<(i64, Layout)>,
     image: Option<i64>,
+    pub delay: Option<&'static str>,
+    pub error: Option<String>,
+}
+
+/// macOS exports dispatch pressure flags here. A warning still allows a single screen
+/// check. A critical signal or a real queue of audio waiting for inference takes priority.
+pub fn delay_reason(s: &Store, pressure: i32) -> Result<Option<&'static str>> {
+    const DISPATCH_MEMORYPRESSURE_CRITICAL: i32 = 0x04;
+    if pressure & DISPATCH_MEMORYPRESSURE_CRITICAL != 0 {
+        return Ok(Some("Waiting for critical memory pressure to ease."));
+    }
+    // Streaming blocks have already reached the recognizer and can wait for the
+    // end of a phrase. Count only blocks ready and still waiting to be processed.
+    let backlogged: bool = s.db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sources
+                       WHERE status='pending' AND retry_at<=?1 LIMIT 1 OFFSET 4)",
+        [crate::store::now()],
+        |row| row.get(0),
+    )?;
+    Ok(backlogged.then_some("Waiting for queued audio to finish processing."))
 }
 
 pub fn observe(s: &Store, v: &Value, interval: u64) -> Result<()> {
@@ -138,6 +158,7 @@ pub fn observe(s: &Store, v: &Value, interval: u64) -> Result<()> {
     }
     tracker.image = image;
     tracker.last = Some(sample);
+    tracker.error = None;
     Ok(())
 }
 
@@ -175,6 +196,61 @@ pub fn history(s: &Store, request: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screen_checks_continue_during_warnings_and_wait_only_for_ready_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(dir.path()).unwrap();
+        for pressure in [0, 1, 2] {
+            assert_eq!(delay_reason(&s, pressure).unwrap(), None);
+        }
+        for id in 1..=8 {
+            s.db.execute(
+                "INSERT INTO sources(id,at,end_at,track,path,status) VALUES(?1,0,1,'me',?2,'streaming')",
+                params![id, format!("audio-{id}")],
+            ).unwrap();
+        }
+        s.db.execute("UPDATE sources SET status='pending' WHERE id<=4", [])
+            .unwrap();
+        s.db.execute(
+            "UPDATE sources SET status='pending',retry_at=unixepoch()+60 WHERE id=5",
+            [],
+        )
+        .unwrap();
+        assert_eq!(delay_reason(&s, 2).unwrap(), None);
+        s.db.execute("UPDATE sources SET retry_at=0 WHERE id=5", [])
+            .unwrap();
+        assert_eq!(
+            delay_reason(&s, 2).unwrap(),
+            Some("Waiting for queued audio to finish processing.")
+        );
+        assert_eq!(
+            delay_reason(&s, 4).unwrap(),
+            Some("Waiting for critical memory pressure to ease.")
+        );
+        s.db.execute("UPDATE sources SET status='streaming' WHERE id=1", [])
+            .unwrap();
+        assert_eq!(delay_reason(&s, 2).unwrap(), None);
+    }
+
+    #[test]
+    fn capture_page_reports_failures_until_a_check_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(dir.path()).unwrap();
+        let config = crate::Config::default();
+        let inbox = crate::live_audio::Shared::default();
+        let request = json!({"query":"no matching capture"});
+        let error = json!({"type":"screen_error","message":"Screen capture timed out."});
+        crate::ingest(&s, &config, &error, &inbox).unwrap();
+        let page = screen_captures::page(&s, &request).unwrap();
+        assert_eq!(page["capture_error"], "Screen capture timed out.");
+        assert!(page["last_check"].is_null());
+        crate::ingest(&s, &config, &frame(1, 123, "display", Some("")), &inbox).unwrap();
+        let page = screen_captures::page(&s, &request).unwrap();
+        assert_eq!(page["items"], json!([]));
+        assert_eq!(page["last_check"], 123);
+        assert!(page["capture_error"].is_null());
+    }
 
     #[test]
     fn history_paginates_equal_times_and_updates_a_visit_in_place() {

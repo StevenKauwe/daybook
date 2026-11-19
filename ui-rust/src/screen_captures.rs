@@ -21,6 +21,9 @@ struct Page {
     items: Vec<Summary>,
     next: Option<[i64; 2]>,
     oldest_image: Option<i64>,
+    last_check: Option<i64>,
+    delay: Option<String>,
+    capture_error: Option<String>,
 }
 #[derive(Deserialize)]
 struct Capture {
@@ -61,6 +64,8 @@ pub(super) struct Browser {
     pub checked: Option<Instant>,
     page_error: Option<String>,
     selected: Option<Value>,
+    pinned: bool,
+    recording: bool,
     pending_detail: Option<Value>,
     capture: Option<Capture>,
     error: Option<String>,
@@ -79,13 +84,15 @@ impl Browser {
     fn key(&self) -> Value {
         json!({"query":self.query.trim(),"before":self.cursors.last()})
     }
-    fn select(&mut self, selection: Value) {
+    fn select(&mut self, selection: Value, pinned: bool) {
+        self.pinned = pinned;
         self.selected = Some(selection);
         self.capture = None;
         self.display.image.clear();
         self.error = None;
     }
     fn reset_selection(&mut self) {
+        self.pinned = false;
         self.page_key = None;
         self.selected = None;
         self.capture = None;
@@ -105,10 +112,11 @@ impl Browser {
             {
                 Ok(page) => {
                     self.page_error = None;
-                    if self.selected.is_none()
+                    if !self.pinned
                         && let Some(first) = page.items.first()
+                        && !self.selected.as_ref().is_some_and(|v| v["id"] == first.id)
                     {
-                        self.select(json!({"id":first.id}));
+                        self.select(json!({"id":first.id}), false);
                     }
                     if let Some(c) = self.capture.as_mut()
                         && c.image_available
@@ -158,29 +166,46 @@ impl Controls {
         b.query.clear();
         b.cursors.clear();
         b.display.mode = Mode::Screenshot;
-        b.select(json!({"observation":observation}));
+        b.select(json!({"observation":observation}), true);
     }
     pub(super) fn capture_browser(&mut self, ui: &mut egui::Ui) {
         let b = &mut self.screen_history.captures;
-        ui.horizontal_wrapped(|ui| {
-            let search = ui.add(
-                egui::TextEdit::singleline(&mut b.query)
-                    .hint_text("Search captures")
-                    .desired_width(265.)
-                    .char_limit(200),
-            );
-            if search.changed() {
-                b.cursors.clear();
-                b.reset_selection();
-                b.edited = Some(Instant::now());
-            }
-            if ui.small_button("Refresh").clicked() {
-                b.checked = None;
-                b.error = None;
-            }
-        });
+        let settings = ui
+            .horizontal_wrapped(|ui| {
+                let search = ui.add(
+                    egui::TextEdit::singleline(&mut b.query)
+                        .hint_text("Search captures")
+                        .desired_width(265.)
+                        .char_limit(200),
+                );
+                if search.changed() {
+                    b.cursors.clear();
+                    b.reset_selection();
+                    b.edited = Some(Instant::now());
+                }
+                if ui.small_button("Refresh").clicked() {
+                    b.checked = None;
+                    b.error = None;
+                }
+                if (b.pinned || !b.cursors.is_empty()) && ui.small_button("Follow latest").clicked()
+                {
+                    b.cursors.clear();
+                    b.reset_selection();
+                }
+                ui.link("Capture settings").clicked()
+            })
+            .inner;
+        if settings {
+            self.settings_tab = 1;
+            self.navigate(4);
+            return;
+        }
         let key = b.key();
         let live = self.status["active"] == "true";
+        if b.recording != live {
+            b.checked = None;
+            b.recording = live;
+        }
         let typing = b
             .edited
             .is_some_and(|t| t.elapsed() < Duration::from_millis(170));
@@ -213,19 +238,38 @@ impl Controls {
             ui.colored_label(CORAL, e);
             return;
         }
-        if current && b.page.items.is_empty() && b.selected.is_none() {
-            if b.query.trim().is_empty() {
-                ui.heading("No screen captures yet");
+        let enabled = self.saved_config["screen_mode"] != "off";
+        let seconds = self.saved_config["screen_seconds"].as_u64().unwrap_or(300);
+        let schedule = if !enabled {
+            "Automatic screen checks are off.".to_owned()
+        } else if live {
+            format!("Screen checks every {seconds} seconds")
+        } else {
+            format!("Recording stopped · Screen checks every {seconds} seconds when recording")
+        };
+        ui.horizontal_wrapped(|ui| {
+            muted(ui, schedule);
+            if let Some(at) = b.page.last_check {
                 muted(
                     ui,
-                    "Automatic checks appear here while Daybook is recording with passive screen text enabled.",
+                    format!("· Last check {}", clock(at, "%b %-d, %H:%M:%S")),
                 );
-                if ui.link("Screen capture settings").clicked() {
-                    self.settings_tab = 1;
-                    self.navigate(4);
-                }
-            } else {
+            }
+        });
+        if enabled {
+            if live && let Some(reason) = b.page.delay.as_deref() {
+                ui.colored_label(CORAL, format!("Screen checks delayed. {reason}"));
+            } else if let Some(error) = b.page.capture_error.as_deref() {
+                ui.colored_label(CORAL, format!("Last screen check failed. {error}"));
+            }
+        }
+        if current && b.page.items.is_empty() && b.selected.is_none() {
+            if !b.query.trim().is_empty() {
                 muted(ui, "No captures match this search.");
+            } else if live && enabled && b.page.capture_error.is_none() && b.page.delay.is_none() {
+                muted(ui, "Waiting for the first screen check…");
+            } else {
+                muted(ui, "No screen captures yet.");
             }
             return;
         }
@@ -354,7 +398,7 @@ impl Controls {
                             }
                         });
                     if let Some(id) = choose {
-                        b.select(json!({"id":id}));
+                        b.select(json!({"id":id}), true);
                         ui.ctx().request_repaint();
                     }
                 },
@@ -631,19 +675,25 @@ mod tests {
     #[test]
     fn browsing_ignores_stale_replies_and_refresh_keeps_the_chosen_check() {
         let mut b = Browser::default();
-        let send_page = |b: &mut Browser| {
-            b.reply(Reply{path:"/screen_captures".into(),body:Some(b.key()),result:Ok(json!({"items":[{"id":2,"at":105,"excerpt":"A"},{"id":1,"at":100,"excerpt":"A"}]}))})
+        let send_page = |b: &mut Browser, latest: i64| {
+            b.reply(Reply {
+                path: "/screen_captures".into(),
+                body: Some(b.key()),
+                result: Ok(json!({"items":[{"id":latest,"at":100+latest*5,"excerpt":"A"},{"id":1,"at":100,"excerpt":"A"}]})),
+            });
         };
-        send_page(&mut b);
+        send_page(&mut b, 2);
         assert_eq!(b.selected, Some(json!({"id":2})));
-        b.select(json!({"id":1}));
+        send_page(&mut b, 3);
+        assert_eq!(b.selected, Some(json!({"id":3})));
+        b.select(json!({"id":1}), true);
         b.reply(Reply {
             path: "/screen_capture".into(),
             body: Some(json!({"id":2})),
             result: Err("stale".into()),
         });
         assert!(b.error.is_none());
-        send_page(&mut b);
+        send_page(&mut b, 4);
         assert_eq!(b.selected, Some(json!({"id":1})));
         b.reply(Reply {
             path: "/screen_capture".into(),
@@ -653,6 +703,9 @@ mod tests {
             ),
         });
         assert!(b.ready());
+        b.reset_selection();
+        send_page(&mut b, 4);
+        assert_eq!(b.selected, Some(json!({"id":4})));
         b.query = "New search".into();
         b.reset_selection();
         b.reply(Reply {

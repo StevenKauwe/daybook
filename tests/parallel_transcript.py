@@ -38,7 +38,11 @@ with tempfile.TemporaryDirectory(prefix="daybook-parallel-api-") as directory:
             with urlopen(Request(base + path, data=payload, headers={"Content-Type":"application/json"}), timeout=5) as response:
                 return response.read() if path.startswith(("/image/","/passive_image/")) else json.load(response)
 
-        assert call("/overview")["synthetic"]
+        overview = call("/overview")
+        assert overview["synthetic"] and overview["active"] == "false"
+        call("/config", dict(overview["config"], screen_seconds=10))
+        assert call("/overview")["config"]["screen_seconds"] == 10
+        assert json.loads((root / "config.json").read_text())["screen_seconds"] == 10
         first = int(datetime.now().replace(hour=10, minute=14, second=0, microsecond=0).timestamp())
         events = [
             (-487,-481,"transcript","me","Bring the paper samples to Market Street."),
@@ -91,6 +95,7 @@ with tempfile.TemporaryDirectory(prefix="daybook-parallel-api-") as directory:
         assert len(visits)==4 and all(v["end"] > v["at"] for v in visits)
         assert [v["text"] for v in call("/screen_text", {"query":"TITLE CLEARANCE"})["items"]] == ["Increase the title clearance to 4 mm"]
         print("PASS pinned overview and searchable automatic screen visits with first/last sightings", flush=True)
+        assert call("/screen_captures", {})["last_check"] is None
         native=bundle / "MacOS/daybook-native"
         notes=root/"notes.png"
         studio=root/"studio.png"
@@ -105,10 +110,12 @@ with tempfile.TemporaryDirectory(prefix="daybook-parallel-api-") as directory:
         call("/command",{"command":"start"})
         for i in range(1,53):
             v=dict({1:note_frame,51:studio_frame}.get(i,{"type":"screen_unchanged"}))
-            v["sample"]={"session":"fixture","target":"fixture","sequence":i,"at":first+32+(i-51)*5}
+            v["sample"]={"session":"fixture","target":"fixture","sequence":i,"at":first+32+(i-51)*10}
             call("/synthetic_screen",v)
         captures=call("/screen_captures",{"query":"forest green thread"})["items"]
-        assert [item["at"] for item in captures] == [first+37,first+32]
+        assert [item["at"] for item in captures] == [first+42,first+32]
+        empty_search = call("/screen_captures", {"query":"no matching capture"})
+        assert not empty_search["items"] and empty_search["last_check"] == first+42
         call("/command",{"command":"stop"})
         spatial = call("/screen_capture", {"id":captures[0]["id"]})
         assert spatial["image_available"] and spatial["layout"]["pixels"]==[1280,800]

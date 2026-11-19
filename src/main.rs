@@ -148,6 +148,7 @@ fn ingest(s: &Store, c: &Config, v: &Value, inbox: &live_audio::Shared) -> Resul
         "state" => {
             if v["starting"] == true && s.get("capture_starting") != "true" {
                 s.state("capture_warning", "")?;
+                s.passive.borrow_mut().error = None;
                 for track in ["me", "remote"] {
                     s.state(&format!("input_level_{track}"), "")?;
                 }
@@ -305,6 +306,13 @@ fn ingest(s: &Store, c: &Config, v: &Value, inbox: &live_audio::Shared) -> Resul
                 s.state("capture_warning", &message)?;
                 s.state("audio_gap", &v.to_string())?;
             }
+        }
+        "screen_error" => {
+            let message = v["message"]
+                .as_str()
+                .unwrap_or("Could not capture the screen.");
+            s.passive.borrow_mut().error = Some(message.to_owned());
+            s.event(message)?;
         }
         "error" => s.event(v["message"].as_str().unwrap_or("Native capture error"))?,
         "ready" => {
@@ -488,6 +496,7 @@ fn run() -> Result<()> {
                 s.event(&format!("Capture ingestion error: {e}"))?;
                 if let Some(b) = &mut native {
                     if matches!(v["type"].as_str(), Some("screen_unchanged" | "screen")) {
+                        s.passive.borrow_mut().error = Some(e.to_string());
                         b.send("refresh_screen");
                     } else {
                         b.send("pause");
@@ -499,11 +508,16 @@ fn run() -> Result<()> {
             worker::cleanup(&s, &c)?;
             inbox.lock().unwrap().reap(&s)?;
             if let Some(b) = &mut native {
-                b.send(if s.pending() > 4 || worker::memory_pressure() {
-                    "defer_screens"
-                } else {
-                    "allow_screens"
-                });
+                let delay = passive::delay_reason(&s, worker::memory_pressure_level())?;
+                let mut tracker = s.passive.borrow_mut();
+                if tracker.delay.is_some() != delay.is_some() {
+                    b.send(if delay.is_some() {
+                        "defer_screens"
+                    } else {
+                        "allow_screens"
+                    });
+                }
+                tracker.delay = delay;
             }
             let bytes = store::disk_bytes(&root);
             if (c.audio_storage != "memory" && s.pending() >= c.max_pending)

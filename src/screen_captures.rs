@@ -128,12 +128,17 @@ pub fn page(s: &Store, request: &Value) -> Result<Value> {
         .last()
         .filter(|_| more)
         .map(|v| json!([v["at"], v["id"]]));
-    let oldest: Option<i64> = s.db.query_row(
-        "SELECT min(capture_id) FROM passive_capture_images",
+    let (oldest, last_check): (Option<i64>, Option<i64>) = s.db.query_row(
+        "SELECT (SELECT min(capture_id) FROM passive_capture_images),
+                (SELECT at FROM passive_captures ORDER BY id DESC LIMIT 1)",
         [],
-        |r| r.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    Ok(json!({"items":items,"next":next,"oldest_image":oldest}))
+    let tracker = s.passive.borrow();
+    Ok(json!({
+        "items": items, "next": next, "oldest_image": oldest,
+        "last_check": last_check, "delay": tracker.delay, "capture_error": tracker.error
+    }))
 }
 
 fn observation_capture(s: &Store, id: i64) -> Result<i64> {

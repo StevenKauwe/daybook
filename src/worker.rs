@@ -523,9 +523,6 @@ fn compress_audio(s: &Store) -> Result<bool> {
     Ok(true)
 }
 
-pub fn memory_pressure() -> bool {
-    memory_pressure_level() > 1
-}
 pub fn defer_for_pressure(level: i32, background: bool) -> bool {
     background && level > 1
 }

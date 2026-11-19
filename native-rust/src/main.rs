@@ -976,7 +976,7 @@ impl App {
                             if let Err(e) = self.content(token, screen, c) {
                                 if screen {
                                     self.screen_busy = false;
-                                    emit(json!({"type":"error","message":e}))
+                                    emit(json!({"type":"screen_error","message":e}))
                                 } else {
                                     self.fail(&e)
                                 }
@@ -985,7 +985,7 @@ impl App {
                         Err(e) => {
                             if screen {
                                 self.screen_busy = false;
-                                emit(json!({"type":"error","message":e}))
+                                emit(json!({"type":"screen_error","message":e}))
                             } else {
                                 self.fail(&e)
                             }
@@ -1042,7 +1042,7 @@ impl App {
                 match result {
                     Err(e) => {
                         self.screen_busy = false;
-                        emit(json!({"type":"error","message":e}));
+                        emit(json!({"type":"screen_error","message":e}));
                     }
                     Ok(image) => {
                         if self
@@ -1056,7 +1056,9 @@ impl App {
                             .is_err()
                         {
                             self.screen_busy = false;
-                            emit(json!({"type":"error","message":"OCR worker capacity reached"}));
+                            emit(
+                                json!({"type":"screen_error","message":"OCR worker capacity reached"}),
+                            );
                         }
                     }
                 }
@@ -1068,7 +1070,7 @@ impl App {
                 self.screen_busy = false;
                 match result {
                     Ok(v) => emit(v),
-                    Err(e) => emit(json!({"type":"error","message":e})),
+                    Err(e) => emit(json!({"type":"screen_error","message":e})),
                 }
             }
         }
@@ -1243,7 +1245,9 @@ fn run() -> Result<(), String> {
                 || !cleared["jpeg"].is_string()
                 || first.as_object().unwrap().len() != 7
             {
-                return Err("Passive screen change detection or screenshot payload mismatch".into());
+                return Err(
+                    "Passive screen change detection or screenshot payload mismatch".into(),
+                );
             }
             emit(
                 json!({"type":"test","result":"PASS native Vision positions, JPEGs, repeated frames, window changes and blank screens","text":text,"words":words.len()}),

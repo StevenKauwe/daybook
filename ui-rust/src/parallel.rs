@@ -34,20 +34,6 @@ pub(super) struct Detail {
     pub more: bool,
     pub request: Option<Value>,
 }
-#[derive(Clone, Copy)]
-pub(super) enum Gesture {
-    Draw,
-    Move,
-    From,
-    Until,
-}
-pub(super) struct Brush {
-    pub original: Span,
-    pub anchor: i64,
-    pub gesture: Gesture,
-    pub axis: Span,
-    pub domain: Arc<Window>,
-}
 pub(super) struct Timeline {
     pub data: Option<Arc<Window>>,
     pub day: Option<String>,
@@ -68,7 +54,8 @@ pub(super) struct Timeline {
     copy_text: Option<String>,
     receipt: String,
     pub held: Option<Arc<Window>>,
-    pub overview_drag: Option<Brush>,
+    pub overview_drag: Option<crate::time_ruler::Brush>,
+    pub last_browse: Option<Instant>,
 }
 impl Default for Timeline {
     fn default() -> Self {
@@ -93,6 +80,7 @@ impl Default for Timeline {
             receipt: String::new(),
             held: None,
             overview_drag: None,
+            last_browse: None,
         }
     }
 }
@@ -215,6 +203,16 @@ impl Timeline {
 impl Controls {
     fn ask_window(&mut self) {
         if self.base.starts_with("synthetic://") || self.parallel.pending.is_some() {
+            return;
+        }
+        // While the ruler is moving, reproject the activity already in memory. Request
+        // the final overview after the gesture settles, keeping SQLite off the input path.
+        if self.parallel.overview_drag.is_none()
+            && self
+                .parallel
+                .last_browse
+                .is_some_and(|at| at.elapsed() < Duration::from_millis(110))
+        {
             return;
         }
         let body = self.parallel.query(self.reading.passive_screen);
@@ -519,36 +517,21 @@ impl Controls {
                     self.parallel.set_range(if start { Span { from: value, ..r } } else { Span { until: value, ..r } });
                 }
             }
-            ui.add_space(5.);
-            for (label, seconds) in [
-                ("−", r.len().saturating_mul(2)),
-                ("30 sec", 30),
-                ("1 min", 60),
-                ("5 min", 300),
-                ("10 min", 600),
-                ("+", (r.len() / 2).max(1)),
-            ] {
-                if ui
-                    .selectable_label(r.len() == seconds && !["−", "+"].contains(&label), label)
-                    .clicked()
-                {
-                    self.parallel.reveal(Span::ending(r.until, seconds));
+            ui.menu_button("Duration", |ui| {
+                for (label, seconds) in [
+                    ("30 sec", 30), ("1 min", 60), ("5 min", 300), ("10 min", 600),
+                    ("Twice as long", r.len().saturating_mul(2)), ("Half as long", (r.len() / 2).max(1)),
+                ] {
+                    if ui.selectable_label(r.len() == seconds, label).clicked() {
+                        self.parallel.reveal(Span::ending(r.until, seconds));
+                        ui.close();
+                    }
                 }
-            }
-            if ui
-                .small_button("‹")
-                .on_hover_text("Previous time window")
-                .clicked()
-            {
-                self.parallel.reveal(Span::ending(r.from, r.len()));
-            }
-            if ui
-                .small_button("›")
-                .on_hover_text("Next time window")
-                .clicked()
-            {
-                self.parallel
-                    .reveal(Span::ending(r.until + r.len(), r.len()));
+            });
+            for (label, end, title) in [("‹", r.from, "Previous selection of this duration"), ("›", r.until + r.len(), "Next selection of this duration")] {
+                if ui.small_button(label).on_hover_text(title).clicked() {
+                    self.parallel.reveal(Span::ending(end, r.len()));
+                }
             }
             if ui
                 .small_button(if self.parallel.fixed.is_some() {
@@ -566,7 +549,6 @@ impl Controls {
                 self.parallel.checked = None;
             }
         });
-        self.overview_ruler(ui, w);
     }
     pub(super) fn parallel_transcript(&mut self, ui: &mut egui::Ui) {
         self.parallel_tools(ui);
@@ -582,6 +564,7 @@ impl Controls {
             ui.label("Opening your transcript…");
             return;
         };
+        self.overview_ruler(ui, &source);
         self.parallel_range(ui, &source);
         self.ask_window();
         let w = self
@@ -758,6 +741,88 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         }
     }
+    fn workspace_frame(ctx: &egui::Context, c: &mut Controls, events: Vec<egui::Event>) {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(950., 690.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| c.workspace(ui),
+        )
+        .drop_without_applying_deltas();
+    }
+    #[test]
+    fn workspace_ruler_keeps_the_same_instant_under_a_trackpad_zoom() {
+        let (mut c, ctx, _) = setup();
+        for _ in 0..3 {
+            workspace_frame(&ctx, &mut c, vec![]);
+        }
+        let rect = ctx
+            .read_response(egui::Id::new("parallel-time-ruler"))
+            .unwrap()
+            .rect;
+        let w = c.parallel.data.as_ref().unwrap().clone();
+        let anchor = w.overview.from as f64 + w.overview.len() as f64 * 0.5;
+        for _ in 0..60 {
+            workspace_frame(
+                &ctx,
+                &mut c,
+                vec![
+                    egui::Event::PointerMoved(rect.center()),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0., 3.),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            let axis = c.parallel.ruler.unwrap();
+            let under_cursor = axis.from as f64 + axis.len() as f64 * 0.5;
+            assert!(
+                (under_cursor - anchor).abs() <= 1.,
+                "stationary cursor drifted by {} seconds",
+                under_cursor - anchor
+            );
+            assert_eq!(c.parallel.fixed, Some(w.range));
+        }
+        assert!(c.parallel.ruler.unwrap().len() < w.overview.len() * 2 / 3);
+    }
+    #[test]
+    fn workspace_ruler_captures_a_drag_between_two_rendered_frames() {
+        let (mut c, ctx, _) = setup();
+        for _ in 0..3 {
+            workspace_frame(&ctx, &mut c, vec![]);
+        }
+        let rect = ctx
+            .read_response(egui::Id::new("parallel-time-ruler"))
+            .unwrap()
+            .rect;
+        let axis = c.parallel.data.as_ref().unwrap().overview;
+        let at = |f| egui::pos2(rect.left() + rect.width() * f, rect.center().y);
+        workspace_frame(
+            &ctx,
+            &mut c,
+            vec![
+                egui::Event::PointerMoved(at(0.75)),
+                press(at(0.75), true),
+                egui::Event::PointerMoved(at(0.25)),
+                press(at(0.25), false),
+            ],
+        );
+        assert_eq!(
+            c.parallel.fixed,
+            Some(Span {
+                from: axis.from + axis.len() / 4,
+                until: axis.from + axis.len() * 3 / 4,
+            })
+        );
+        assert_eq!(c.parallel.ruler, Some(axis));
+    }
     #[test]
     fn dragging_repositions_and_loads_the_columns_before_the_mouse_is_released() {
         let (mut c, ctx, _) = setup();
@@ -802,13 +867,15 @@ mod tests {
         assert!(c.parallel.overview_drag.is_none());
         assert_eq!(c.parallel.fixed.unwrap().until, from + 209);
         // A second drag resizes the existing selection using its handle.
+        let band = ctx
+            .read_response(egui::Id::new("parallel-selection-track"))
+            .unwrap()
+            .rect;
+        let handle = egui::pos2(point(70.).x, band.center().y);
         frame(
             &ctx,
             &mut c,
-            vec![
-                egui::Event::PointerMoved(point(70.)),
-                press(point(70.), true),
-            ],
+            vec![egui::Event::PointerMoved(handle), press(handle, true)],
         );
         frame(&ctx, &mut c, vec![egui::Event::PointerMoved(point(100.))]);
         assert_eq!(
@@ -844,7 +911,43 @@ mod tests {
         );
     }
     #[test]
-    fn moving_by_the_grip_preserves_duration_and_the_ruler_survives_release_and_replies() {
+    fn selection_band_moves_when_it_fills_the_view_or_is_only_one_second_wide() {
+        let (mut c, ctx, _) = setup();
+        let axis = c.parallel.data.as_ref().unwrap().overview;
+        c.parallel.ruler = Some(axis);
+        for original in [axis, Span::ending(axis.from + axis.len() / 2 + 1, 1)] {
+            c.parallel.set_range(original);
+            for _ in 0..2 {
+                workspace_frame(&ctx, &mut c, vec![]);
+            }
+            let track = ctx
+                .read_response(egui::Id::new("parallel-selection-track"))
+                .unwrap()
+                .rect;
+            let from = track.center();
+            let to = from + egui::vec2(track.width() / 4., 0.);
+            workspace_frame(
+                &ctx,
+                &mut c,
+                vec![
+                    egui::Event::PointerMoved(from),
+                    press(from, true),
+                    egui::Event::PointerMoved(to),
+                    press(to, false),
+                ],
+            );
+            assert_eq!(
+                c.parallel.fixed,
+                Some(Span::ending(
+                    original.until + axis.len() / 4,
+                    original.len()
+                ))
+            );
+            assert_eq!(c.parallel.ruler, Some(axis));
+        }
+    }
+    #[test]
+    fn moving_the_selection_band_preserves_duration_and_the_ruler_survives_release_and_replies() {
         let (mut c, ctx, _) = setup();
         for _ in 0..3 {
             frame(&ctx, &mut c, vec![]);
@@ -861,13 +964,17 @@ mod tests {
                 rect.center().y,
             )
         };
-        let grip = |t| egui::pos2(point(t).x, rect.bottom() - 6.);
-        drag(&ctx, &mut c, grip(30), grip(49));
+        let band = ctx
+            .read_response(egui::Id::new("parallel-selection-track"))
+            .unwrap()
+            .rect;
+        let on_band = |t| egui::pos2(point(t).x, band.center().y);
+        drag(&ctx, &mut c, on_band(30), on_band(49));
         let moved = c.parallel.fixed.unwrap();
         assert_eq!((moved.from, moved.len()), (axis.from + 19, 60));
         // Grab the handle three pixels off its center. Only the dragged endpoint changes.
         let offset = egui::vec2(3., 0.);
-        drag(&ctx, &mut c, point(19) + offset, point(29) + offset);
+        drag(&ctx, &mut c, on_band(19) + offset, on_band(29) + offset);
         assert_eq!(
             c.parallel.fixed,
             Some(Span {
@@ -990,7 +1097,11 @@ mod tests {
     }
     #[test]
     fn zoomed_ruler_border_handles_bring_each_endpoint_to_the_pointer() {
-        let (mut c, ctx, rect, whole, axis) = zoom_inside_selection();
+        let (mut c, ctx, _, whole, axis) = zoom_inside_selection();
+        let rect = ctx
+            .read_response(egui::Id::new("parallel-selection-track"))
+            .unwrap()
+            .rect;
         let left = egui::pos2(rect.left() + 4., rect.center().y);
         let right = egui::pos2(rect.right() - 4., rect.center().y);
         let t1 = axis.from + axis.len() / 4;
@@ -1032,7 +1143,11 @@ mod tests {
     }
     #[test]
     fn a_selection_entirely_outside_the_ruler_can_be_revealed_or_resized() {
-        let (mut c, ctx, rect, _, axis) = zoom_inside_selection();
+        let (mut c, ctx, _, _, axis) = zoom_inside_selection();
+        let rect = ctx
+            .read_response(egui::Id::new("parallel-selection-track"))
+            .unwrap()
+            .rect;
         let before = Span {
             from: axis.from - 60,
             until: axis.from - 30,

@@ -667,6 +667,27 @@ mod tests {
         }
     }
     #[test]
+    fn timeline_zoom_pan_and_fit_leave_the_selected_transcript_intact() {
+        let ctx = egui::Context::default();
+        design::setup(&ctx);
+        let (tx, _) = mpsc::sync_channel(30);
+        let (_, rx) = mpsc::sync_channel(30);
+        let mut c = preview::fixture(tx, rx);
+        let window = c.parallel.data.as_ref().unwrap().clone();
+        click_label(&ctx, &mut c, "+");
+        let zoomed = c.parallel.ruler.unwrap();
+        assert_eq!(zoomed.len(), window.overview.len() / 2);
+        assert_eq!(c.parallel.fixed, Some(window.range));
+        click_label(&ctx, &mut c, "Later");
+        let later = c.parallel.ruler.unwrap();
+        assert_eq!(later.len(), zoomed.len());
+        assert!(later.from > zoomed.from);
+        click_label(&ctx, &mut c, "Fit selection");
+        let fit = c.parallel.ruler.unwrap();
+        assert!(fit.from < window.range.from && fit.until > window.range.until);
+        assert_eq!(c.parallel.fixed, Some(window.range));
+    }
+    #[test]
     fn corner_menu_submits_one_update_from_archive_and_the_successor_restores_the_view() {
         let ctx = egui::Context::default();
         design::setup(&ctx);

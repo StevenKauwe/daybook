@@ -33,6 +33,7 @@ mod preview;
 mod reading;
 mod scope;
 mod screen_history;
+mod time_ruler;
 #[path = "../../src/transcript_range.rs"]
 mod transcript_range;
 mod workspace;

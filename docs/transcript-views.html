@@ -44,17 +44,27 @@ try {
       <button type="button" data-middle="sys" aria-pressed="true">System audio</button>
       <button type="button" data-middle="passive" aria-pressed="false">Passive screen text</button>
     </div>
-    <div class="pt-tools">
-      <div class="pt-fields"><label>From <input data-from type="text" value="10:14:00" aria-label="Range start"></label><span aria-hidden="true">→</span><label>Until <input data-until type="text" value="10:15:00" aria-label="Range end"></label></div>
-      <div class="pt-zooms" role="group" aria-label="Time shown"><button type="button" data-zoom="out" aria-label="Zoom out">−</button><button type="button" data-seconds="30" aria-pressed="false">30 sec</button><button type="button" data-seconds="60" aria-pressed="true">1 min</button><button type="button" data-seconds="300" aria-pressed="false">5 min</button><button type="button" data-seconds="600" aria-pressed="false">10 min</button><button type="button" data-zoom="in" aria-label="Zoom in">+</button></div>
+    <div class="pt-nav" role="group" aria-label="Timeline navigation">
+      <strong>Timeline</strong>
+      <button type="button" data-zoom="out" aria-label="Zoom timeline out">−</button>
+      <button type="button" data-zoom="in" aria-label="Zoom timeline in">+</button>
+      <button type="button" data-fit>Fit selection</button>
+      <button type="button" data-pan="-0.5">Earlier</button><button type="button" data-pan="0.5">Later</button>
     </div>
-    <div class="pt-ruler">
-      <div class="pt-bands" aria-hidden="true"></div>
-      <div class="pt-window" aria-hidden="true"></div>
-      <input class="pt-handle" data-grip="from" aria-label="Start of selected range" type="range" min="0" max="600" step="1" value="0">
-      <input class="pt-handle" data-grip="until" aria-label="End of selected range" type="range" min="0" max="600" step="1" value="60">
+    <div class="pt-tracks">
+      <span>Activity</span><div class="pt-ruler" role="group" aria-label="Activity. Drag across to select time.">
+        <div class="pt-bands" aria-hidden="true"></div><div class="pt-ticks" aria-hidden="true"></div>
+      </div>
+      <span>Selection</span><div class="pt-selection" role="group" aria-label="Move or trim the selected time">
+        <div class="pt-window" aria-hidden="true"></div>
+        <button type="button" class="pt-handle" data-grip="from" role="slider" aria-label="Selected start"></button>
+        <button type="button" class="pt-handle" data-grip="until" role="slider" aria-label="Selected end"></button>
+      </div>
     </div>
-    <div class="pt-ticks" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+    <div class="pt-fields"><label>From <input data-from type="text" value="10:14:00" aria-label="Range start"></label>
+      <label>Until <input data-until type="text" value="10:15:00" aria-label="Range end"></label>
+      <label>Duration <select data-duration><option value="">Custom</option><option value="30">30 sec</option><option value="60" selected>1 min</option><option value="300">5 min</option><option value="600">10 min</option><option value="double">Twice as long</option><option value="half">Half as long</option></select></label>
+    </div>
     <output class="pt-extent" aria-live="polite"></output>
     <p class="pt-message" role="alert" hidden></p>
   </section>
@@ -98,29 +108,30 @@ try {
 #daybook-columns .pt-ticks,#daybook-columns .pt-fields input,#daybook-columns .pt-clock-label {font-variant-numeric:tabular-nums}
 #daybook-columns .pt-sample select {margin-left:3px;padding:4px 6px;background:var(--pt-paper);color:var(--pt-ink);border:1px solid var(--pt-edge);border-radius:6px;font:inherit}
 #daybook-columns .pt-range {padding:10px 24px 7px;background:var(--pt-soft);border-bottom:1px solid var(--pt-edge)}
-#daybook-columns .pt-tools {justify-content:space-between;margin-bottom:7px}
 #daybook-columns .pt-fields {gap:6px;flex-wrap:wrap;color:var(--pt-dim)}
 #daybook-columns .pt-fields label {font-size:12px}
 #daybook-columns .pt-fields input {width:79px;text-align:center;background:var(--pt-paper);border:1px solid var(--pt-edge);border-radius:5px;padding:4px 0;font:500 13px/1.3 ui-monospace,monospace;color:var(--pt-ink)}
 #daybook-columns .pt-quiet {font-size:13px;border-color:transparent;background:transparent;color:var(--pt-dim);padding:4px 7px}
-#daybook-columns .pt-ruler {margin:0 5px;position:relative;height:32px;touch-action:none;cursor:crosshair}
-#daybook-columns .pt-bands {position:absolute;inset:4px 0;background:var(--pt-paper);border-radius:4px;overflow:hidden}
+#daybook-columns .pt-nav {display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin:6px 0}
+#daybook-columns .pt-nav strong {font-weight:500;margin-right:6px}
+#daybook-columns .pt-nav button {padding:3px 8px;font-size:13px}
+#daybook-columns .pt-tracks {display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 12px;align-items:center;margin:7px 0 9px;font-size:13px;color:var(--pt-dim);user-select:none}
+#daybook-columns .pt-ruler,#daybook-columns .pt-selection {position:relative;min-width:0;overflow:hidden;touch-action:none;border:1px solid var(--pt-edge);border-radius:5px;background:var(--pt-paper);cursor:crosshair}
+#daybook-columns .pt-ruler {height:40px}
+#daybook-columns .pt-selection {height:25px}
+#daybook-columns .pt-bands {position:absolute;inset:0;pointer-events:none}
 #daybook-columns .pt-band {position:absolute;height:4px;background:var(--pt-color);border-radius:2px;opacity:.8}
 #daybook-columns [data-lane=mic] {--pt-color:var(--pt-mic)}
 #daybook-columns [data-lane=sys] {--pt-color:var(--pt-sys)}
 #daybook-columns [data-lane=passive] {--pt-color:light-dark(#386e6b,#92cec7)}
 #daybook-columns [data-lane=save] {--pt-color:var(--pt-save)}
-#daybook-columns .pt-window {position:absolute;top:1px;bottom:1px;border-block:1px solid var(--pt-focus);background:color-mix(in srgb,var(--pt-focus) 10%,transparent);pointer-events:none}
-#daybook-columns .pt-handle {appearance:none;-webkit-appearance:none;position:absolute;top:0;left:-6px;width:calc(100% + 12px);height:32px;margin:0;outline:0;background:transparent;pointer-events:none}
-#daybook-columns .pt-handle::-webkit-slider-runnable-track {height:32px;background:transparent}
-#daybook-columns .pt-handle::-moz-range-track {height:32px;background:transparent}
-#daybook-columns .pt-handle::-webkit-slider-thumb {appearance:none;-webkit-appearance:none;width:12px;height:32px;border:2px solid var(--pt-paper);border-radius:4px;background:var(--pt-focus);pointer-events:auto;cursor:ew-resize}
-#daybook-columns .pt-handle::-moz-range-thumb {width:10px;height:28px;border:2px solid var(--pt-paper);border-radius:4px;background:var(--pt-focus);pointer-events:auto;cursor:ew-resize}
-#daybook-columns .pt-handle:focus-visible::-webkit-slider-thumb {outline:2px solid var(--pt-focus);outline-offset:1px}
-#daybook-columns .pt-ticks {position:relative;display:flex;justify-content:space-between;align-items:center;margin:0 5px;user-select:none}
-#daybook-columns .pt-ticks span:nth-child(2),#daybook-columns .pt-ticks span:nth-child(3),#daybook-columns .pt-ticks span:nth-child(4) {position:absolute;left:25%;transform:translateX(-50%)}
-#daybook-columns .pt-ticks span:nth-child(3) {left:50%}
-#daybook-columns .pt-ticks span:nth-child(4) {left:75%}
+#daybook-columns .pt-window {position:absolute;inset-block:0;display:grid;place-items:center;background:color-mix(in srgb,var(--pt-focus) 16%,var(--pt-paper));color:var(--pt-focus);border-block:1px solid var(--pt-focus);font-variant-numeric:tabular-nums;cursor:grab}
+#daybook-columns .pt-handle {position:absolute;inset-block:0;transform:translateX(-50%);width:14px;min-width:0;margin:0;padding:0;border:0;border-radius:4px;background:var(--pt-focus);color:var(--pt-paper);font-size:16px;cursor:ew-resize}
+#daybook-columns .pt-ticks {position:absolute;inset:18px 0 0;pointer-events:none}
+#daybook-columns .pt-ticks span {position:absolute;bottom:0;white-space:nowrap;transform:translateX(-50%);font-size:11px}
+#daybook-columns .pt-fields input,#daybook-columns .pt-fields select {color:var(--pt-ink);background:var(--pt-paper);font-variant-numeric:tabular-nums}
+#daybook-columns .pt-fields input {cursor:ew-resize;touch-action:none}
+#daybook-columns .pt-fields input:focus {cursor:text}
 #daybook-columns .pt-message {color:var(--pt-mic);margin-top:5px}
 #daybook-columns .pt-zooms {display:flex;align-items:center;gap:2px}
 #daybook-columns .pt-zooms button {font-size:12px;padding:4px 8px;color:var(--pt-dim);background:transparent;border-color:transparent}
@@ -196,9 +207,9 @@ try {
   #daybook-columns .pt-title,#daybook-columns .pt-range,#daybook-columns .pt-footer {padding-inline:11px}
   #daybook-columns .pt-title {gap:5px;padding-block:11px}
   #daybook-columns h2 {font-size:24px}
-  #daybook-columns .pt-ticks[data-days] span:nth-child(even) {display:none}
 }
 @media(pointer:coarse) {
+  #daybook-columns .pt-tracks .pt-ruler,#daybook-columns .pt-tracks .pt-selection {min-height:44px}
   #daybook-columns .pt-origin,#daybook-columns .pt-head .pt-lane-copy {min-width:31px;min-height:30px}
 }
 </style>
@@ -227,8 +238,11 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
   }
   const picks = new Map();
   let start = 0, until = 60, visible = [], layoutFrame = 0, previewScope = 'auto';
-  let horizon = duration, heldHorizon = 0;
+  let viewFrom = 0, viewLength = duration, overviewFrame = 0;
   const scroll = find('.pt-scroll'), grid = find('.pt-grid'), ruler = find('.pt-ruler');
+  const selectionTrack = find('.pt-selection'), windowMark = find('.pt-window');
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const fraction = (at, start, length) => clamp((at - start) / length, 0, 1);
   const preview = find('.pt-copy-preview'), area = preview.querySelector('textarea');
   const detail = find('.pt-detail'), detailEntries = find('.pt-detail-entries');
   const folds = new Map();
@@ -389,21 +403,86 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     const bands = find('.pt-bands');
     bands.replaceChildren();
     for (const e of entries.filter(shown)) {
+      if (e.at >= viewFrom + viewLength || Math.max(e.at + 1, e.end) <= viewFrom) continue;
+      const left = fraction(e.at, viewFrom, viewLength);
+      const right = fraction(e.end, viewFrom, viewLength);
       const band = element('span', 'pt-band');
       band.dataset.lane = e.lane;
       Object.assign(band.style, {
-        top: ({mic: 3, sys: 10, passive: 10, save: 17}[e.lane]) + 'px',
-        left: (e.at / horizon * 100) + '%',
-        width: 'max(2px,' + ((e.end - e.at) / horizon * 100) + '%)'
+        top: ({mic: 3, sys: 8, passive: 8, save: 13}[e.lane]) + 'px',
+        left: left * 100 + '%', width: 'max(2px,' + (right - left) * 100 + '%)'
       });
       bands.append(band);
     }
     const ticks = find('.pt-ticks');
-    ticks.toggleAttribute('data-days', origin + horizon >= 86400);
-    ticks.querySelectorAll('span').forEach((el,i) => {
-      const t = Math.round(i / 4 * horizon), label = tickLabel(t,horizon);
-      el.textContent = label.replace(/:00$/, '');
-    });
+    ticks.replaceChildren();
+    const width = ruler.clientWidth;
+    const wanted = viewLength / Math.max(1, width / 105);
+    const steps = [1,2,5,10,15,30,60,120,300,600,900,1800,3600,7200,10800,21600,43200,86400,604800,2592000];
+    const step = steps.find(n => n >= wanted) ?? Math.ceil(wanted / 31536000) * 31536000;
+    const first = Math.ceil((origin + viewFrom) / step) * step - origin;
+    let previousRight = 0;
+    for (let t = first; t <= viewFrom + viewLength; t += step) {
+      const label = tickLabel(t, viewLength);
+      const text = step >= 60 ? label.replace(/:00$/, '') : label;
+      const half = text.length * 3.5 + 2;
+      const x = clamp((t - viewFrom) / viewLength * width, half, width - half);
+      if (x - half < previousRight || x + half > width) continue;
+      const el = element('span', '', text);
+      el.style.left = x + 'px';
+      ticks.append(el);
+      previousRight = x + half + 6;
+    }
+    find('[data-zoom=in]').disabled = viewLength <= 1;
+    find('[data-zoom=out]').disabled = viewLength >= maxOffset;
+    drawSelection();
+  }
+  function drawSelection() {
+    const width = selectionTrack.clientWidth;
+    const hi = viewFrom + viewLength;
+    const visible = until > viewFrom && start < hi;
+    const half = Math.min(width / 4, 7);
+    let a = clamp(fraction(start, viewFrom, viewLength) * width, half, width-half);
+    let b = clamp(fraction(until, viewFrom, viewLength) * width, half, width-half);
+    const body = clamp(width - 4 * half, 0, 18);
+    if (visible && b - a < 2 * half + body) {
+      const margin = 2 * half + body / 2;
+      const mid = clamp((a + b) / 2, margin, width - margin);
+      a = mid - half - body/2; b = mid + half + body/2;
+    }
+    windowMark.hidden = !visible;
+    windowMark.style.left = (a - half) + 'px';
+    windowMark.style.width = Math.max(0, b - a + 2 * half) + 'px';
+    windowMark.textContent = b - a > 80 ? shortDuration(until-start) : '';
+    for (const [key, at, x, show] of [['from',start,a,until > viewFrom],['until',until,b,start < hi]]) {
+      const handle = find('[data-grip='+key+']');
+      handle.hidden = !show;
+      handle.style.left = x + 'px';
+      handle.textContent = at < viewFrom || (!visible && at <= viewFrom) ? '‹' : at > hi || !visible ? '›' : '│';
+      handle.setAttribute('aria-valuemin', key === 'from' ? 0 : start + 1);
+      handle.setAttribute('aria-valuemax', key === 'from' ? until - 1 : maxOffset);
+      handle.setAttribute('aria-valuenow', at);
+      handle.setAttribute('aria-valuetext', stamp(at));
+    }
+  }
+  function shortDuration(n) {
+    if (n < 60) return n + 's';
+    if (n < 3600) return Math.floor(n / 60) + 'm ' + n % 60 + 's';
+    if (n < 86400) return Math.floor(n / 3600) + 'h ' + Math.floor(n / 60) % 60 + 'm';
+    return Math.floor(n / 86400) + 'd ' + Math.floor(n / 3600) % 24 + 'h';
+  }
+  function setView(left, length) {
+    viewLength = clamp(length, 1, maxOffset);
+    viewFrom = clamp(left, 0, maxOffset - viewLength);
+    if (!overviewFrame) overviewFrame = requestAnimationFrame(() => { overviewFrame = 0; drawOverview(); });
+  }
+  function zoomView(factor, anchor) {
+    const next = clamp(viewLength * factor, 1, maxOffset);
+    setView(viewFrom + anchor * (viewLength - next), next);
+  }
+  function fit() {
+    const length = (until - start) * 1.25;
+    setView((start + until - length) / 2, length);
   }
 
   function closeOriginal(restoreFocus = false) {
@@ -821,45 +900,56 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
   }).observe(scroll);
   document.fonts?.ready.then(queueMeasure);
 
+  let gridFrame = 0;
   function setBounds(from,to) {
     from = Math.max(0, Math.min(maxOffset - 1, Math.round(from)));
     to = Math.max(from + 1, Math.min(maxOffset, Math.round(to)));
     const changed = start!==from || until!==to;
     start=from;until=to;
     if (changed) previewScope = 'auto';
-    const extent = Math.max(duration, until, heldHorizon);
-    if (horizon !== extent || !find('.pt-bands').childElementCount) {
-      horizon = extent;
-      drawOverview();
-    }
     for(const [key,val] of [['from',start],['until',until]]) {
       const field = find('[data-'+key+']');
       field.value = stamp(val);
       field.style.width = Math.max(79, Math.min(165, field.value.length * 8 + 12)) + 'px';
       field.removeAttribute('aria-invalid');
-      const grip=find('[data-grip='+key+']');
-      grip.max=String(horizon);grip.value=String(val);grip.setAttribute('aria-valuetext',stamp(val));
     }
-    for (const preset of root.querySelectorAll('[data-seconds]')) {
-      preset.setAttribute('aria-pressed', String(until - start === Number(preset.dataset.seconds)));
-    }
-    find('[data-zoom=in]').disabled = until - start === 1;
-    find('[data-zoom=out]').disabled = until - start === maxOffset;
+    const seconds = until - start;
+    find('[data-duration]').value = [30,60,300,600].includes(seconds) ? String(seconds) : '';
     const outside = find('.pt-extent');
     const endNotice = until > duration ? 'Sample recording ends at ' + stamp(duration) + '.' : '';
     if (outside.textContent !== endNotice) outside.textContent = endNotice;
-    const windowMark=find('.pt-window');
-    windowMark.style.left=(start/horizon*100)+'%';windowMark.style.width=((until-start)/horizon*100)+'%';
+    drawSelection();
     find('.pt-message').hidden=true;
-    if(changed || !grid.childElementCount) { scroll.scrollTop=0;drawGrid(); }
+    if (changed || !grid.childElementCount) {
+      scroll.scrollTop = 0;
+      if (!gridFrame) gridFrame = requestAnimationFrame(() => { gridFrame = 0; drawGrid(); });
+    }
   }
   for (const key of ['from','until']) {
     const grip=find('[data-grip='+key+']'), input=find('[data-'+key+']');
-    grip.addEventListener('input',()=>{
-      const t=Number(grip.value);
-      if(key==='from')setBounds(Math.min(t,until-1),until);
-      else setBounds(start,Math.max(t,start+1));
+    const adjust = t => key === 'from' ? setBounds(clamp(t, 0, until-1), until)
+        : setBounds(start, clamp(t, start+1, maxOffset));
+    grip.addEventListener('keydown', e => {
+      const direction = {ArrowLeft:-1, ArrowDown:-1, ArrowRight:1, ArrowUp:1}[e.key];
+      if (!direction) return;
+      e.preventDefault();
+      adjust((key === 'from' ? start : until) + direction * (e.shiftKey ? 10 : 1));
     });
+    let scrub;
+    input.addEventListener('pointerdown', e => {
+      if (e.button === 0) scrub = {id:e.pointerId, x:e.clientX, at:key === 'from' ? start : until};
+    });
+    input.addEventListener('pointermove', e => {
+      if (!scrub || scrub.id !== e.pointerId || !e.buttons) return;
+      const dx = e.clientX - scrub.x;
+      if (Math.abs(dx) < 3 && !scrub.active) return;
+      scrub.active = true;
+      input.setPointerCapture(e.pointerId);
+      adjust(Math.round(scrub.at + dx * clamp(viewLength / 900, .25, 3600) * (e.shiftKey ? .1 : 1)));
+    });
+    for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+      input.addEventListener(event, () => { scrub = null; });
+    }
     function commitInput() {
       const raw=input.value.trim();
       const m = /^(?:\+?(\d+)d\s+)?([01]?\d|2[0-3]):([0-5]\d):([0-5]\d)$/.exec(raw);
@@ -876,40 +966,70 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     input.addEventListener('keydown',e=>{if(e.key==='Enter') {e.preventDefault();commitInput();}});
   }
   let drag = null;
-  const secondAt = x => {const b = ruler.getBoundingClientRect();return Math.max(0,Math.min(horizon,Math.round((x-b.left)/b.width*horizon)));};
-  function dragTo(t) {
-    const a=Math.min(drag.at,t,horizon-1), b=Math.max(drag.at,t,a+1);
-    setBounds(a,b);
+  const relativeX = (x, rect) => clamp((x - rect.left) / Math.max(1, rect.width), 0, 1);
+  function sampleDrag(x) {
+    if (!drag.moved && Math.abs(x - drag.x) < 3) return;
+    drag.moved = true;
+    const t = Math.round(drag.view + relativeX(x, drag.rect) * drag.length);
+    const delta = t - drag.anchor;
+    const endpoint = at => at >= drag.view && at <= drag.view + drag.length ? at + delta : t;
+    if (drag.mode === 'from') setBounds(Math.min(endpoint(drag.from), drag.until-1), drag.until);
+    else if (drag.mode === 'until') setBounds(drag.from, Math.max(endpoint(drag.until), drag.from+1));
+    else if (drag.mode === 'move') {
+      const size = drag.until - drag.from;
+      const left = clamp(drag.from + delta, 0, maxOffset - size);
+      setBounds(left, left + size);
+    } else setBounds(Math.min(drag.anchor, t), Math.max(drag.anchor, t));
   }
-  ruler.addEventListener('pointerdown',e=>{
-    if(e.button!==0)return;
-    heldHorizon=horizon;
-    if(e.target.matches('input'))return;
-    e.preventDefault();drag={at:secondAt(e.clientX),id:e.pointerId};ruler.setPointerCapture(e.pointerId);
-  });
-  ruler.addEventListener('pointermove',e=>{if(drag?.id===e.pointerId)dragTo(secondAt(e.clientX));});
-  ruler.addEventListener('pointerup',e=>{if(drag?.id===e.pointerId){dragTo(secondAt(e.clientX));drag=null;}});
-  function releaseOverview() {
-    drag=null;heldHorizon=0;setBounds(start,until);
-  }
-  ruler.addEventListener('lostpointercapture',releaseOverview);
-  document.addEventListener('pointerup',()=>{if(heldHorizon)releaseOverview();});
-  document.addEventListener('pointercancel',()=>{if(heldHorizon)releaseOverview();});
-  for (const preset of root.querySelectorAll('[data-seconds]')) {
-    preset.addEventListener('click', () => {
-      const span = Number(preset.dataset.seconds);
-      const left = Math.min(start, Math.max(0, duration - span));
-      setBounds(left, left + span);
+  for (const track of [ruler,selectionTrack]) {
+    track.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || drag) return;
+      const rect = track.getBoundingClientRect();
+      const mode = track === ruler || e.shiftKey ? 'draw' : e.target.dataset.grip
+        || (e.target === windowMark ? 'move' : 'draw');
+      const anchor = Math.round(viewFrom + relativeX(e.clientX, rect) * viewLength);
+      drag = {id:e.pointerId, x:e.clientX, rect, mode, anchor, view:viewFrom, length:viewLength, from:start, until, moved:false};
+      e.preventDefault();
+      track.setPointerCapture(e.pointerId);
     });
+    track.addEventListener('pointermove', e => { if (drag?.id === e.pointerId) sampleDrag(e.clientX); });
+    track.addEventListener('pointerup', e => {
+      if (drag?.id !== e.pointerId) return;
+      sampleDrag(e.clientX);
+      if (!drag.moved && ['from','until'].includes(drag.mode) && (until <= viewFrom || start >= viewFrom + viewLength)) fit();
+      drag = null;
+    });
+    for (const event of ['lostpointercapture','pointercancel']) {
+      track.addEventListener(event, e => { if (drag?.id === e.pointerId) drag = null; });
+    }
+    track.addEventListener('wheel', e => {
+      e.preventDefault();
+      if (drag) return;
+      const units = e.deltaMode === 1 ? 32 : e.deltaMode === 2 ? 160 : 1;
+      zoomView(2 ** clamp(e.deltaY * units / 180, -8, 8), relativeX(e.clientX, track.getBoundingClientRect()));
+    }, {passive:false});
   }
+  find('[data-duration]').addEventListener('change', e => {
+    const value = e.target.value;
+    if (!value) return;
+    const size = clamp(value === 'double' ? (until-start)*2 : value === 'half' ? Math.round((until-start)/2) : Number(value), 1, maxOffset);
+    const end = Math.max(until, size);
+    setBounds(end - size, end);
+    if (start < viewFrom || until > viewFrom + viewLength) fit();
+  });
+  find('[data-zoom=out]').addEventListener('click', () => zoomView(2, .5));
+  find('[data-zoom=in]').addEventListener('click', () => zoomView(.5, .5));
+  find('[data-fit]').addEventListener('click', fit);
+  for (const button of root.querySelectorAll('[data-pan]')) {
+    button.addEventListener('click', () => setView(viewFrom + Number(button.dataset.pan) * viewLength, viewLength));
+  }
+  new ResizeObserver(drawOverview).observe(ruler);
   function zoom(factor, anchor = start === 0 ? 0 : .5) {
     const span = until - start;
     const next = Math.max(1, Math.min(maxOffset, Math.round(span * factor)));
     const left = Math.max(0, Math.min(maxOffset - next, Math.round(start + anchor * (span - next))));
     setBounds(left, left + next);
   }
-  find('[data-zoom=out]').addEventListener('click', () => zoom(2));
-  find('[data-zoom=in]').addEventListener('click', () => zoom(.5));
   let wheelRemainder = 0, lastWheelAt = 0;
   scroll.addEventListener('wheel', event => {
     if (!event.ctrlKey && !event.metaKey) return;
@@ -997,10 +1117,10 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
   if (remember) chooseMiddle('passive');
   if (remember && window.openai) {
     let saved, timer;
-    const snapshot = () => ({sample:sampleName, middle, from:start, until, excerpts:[...picks]});
+    const snapshot = () => ({sample:sampleName, middle, from:start, until, viewFrom, viewLength, excerpts:[...picks]});
     function restore(state) {
       const view = state?.privateContent?.parallelTranscript;
-      if (!view || !Number.isSafeInteger(view.from) || !Number.isSafeInteger(view.until) ||
+      if (!view || drag || JSON.stringify(view) === saved || !Number.isSafeInteger(view.from) || !Number.isSafeInteger(view.until) ||
           view.from < 0 || view.until > maxOffset || view.from >= view.until) return;
       // Restore excerpts from the original sample when reopening an older study.
       chooseSample(view.sample ?? (view.excerpts?.length ? 'pauses' : 'steady'));
@@ -1014,6 +1134,9 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
         }
       }
       setBounds(view.from,view.until);
+      if (Number.isFinite(view.viewFrom) && Number.isFinite(view.viewLength) && view.viewLength >= 1) {
+        setView(view.viewFrom, view.viewLength);
+      } else if (view.from < viewFrom || view.until > viewFrom + viewLength) fit();
       updatePicks();
       saved = JSON.stringify(snapshot());
     }

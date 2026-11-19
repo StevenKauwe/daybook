@@ -32,7 +32,923 @@ try {
 </nav>
 <div id="daybook-transcript-lab">
   <div class="viz-carousel" aria-label="Daybook transcript designs">
-    <section data-variant="Margin notes"></section>
+    <section data-variant="Parallel transcript">
+<section id="daybook-columns" aria-label="Daybook parallel transcript">
+  <header class="pt-title">
+    <div><span class="pt-brand">Daybook</span><h2>Parallel transcript</h2></div>
+    <div class="pt-actions"><span class="pt-sample">Sample recording · 10:14–10:24</span><button type="button" class="pt-quiet" data-pick aria-pressed="false" hidden>☆ Shortlist</button></div>
+  </header>
+  <section class="pt-range" aria-label="Time window">
+    <div class="pt-tools">
+      <div class="pt-fields"><label>From <input data-from type="text" value="10:14:00" aria-label="Range start"></label><span aria-hidden="true">→</span><label>Until <input data-until type="text" value="10:14:30" aria-label="Range end"></label></div>
+      <div class="pt-zooms" role="group" aria-label="Time shown"><button type="button" data-zoom="out" aria-label="Zoom out">−</button><button type="button" data-seconds="30" aria-pressed="true">30 sec</button><button type="button" data-seconds="60" aria-pressed="false">1 min</button><button type="button" data-seconds="300" aria-pressed="false">5 min</button><button type="button" data-seconds="600" aria-pressed="false">10 min</button><button type="button" data-zoom="in" aria-label="Zoom in">+</button></div>
+    </div>
+    <div class="pt-ruler">
+      <div class="pt-bands" aria-hidden="true"></div>
+      <div class="pt-window" aria-hidden="true"></div>
+      <input class="pt-handle" data-grip="from" aria-label="Start of selected range" type="range" min="0" max="600" step="1" value="0">
+      <input class="pt-handle" data-grip="until" aria-label="End of selected range" type="range" min="0" max="600" step="1" value="30">
+    </div>
+    <div class="pt-ticks" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+    <output class="pt-extent" aria-live="polite"></output>
+    <p class="pt-message" role="alert" hidden></p>
+  </section>
+  <div class="pt-scroll" role="region" aria-label="Transcript by source"><div class="pt-grid"></div><div class="pt-empty" hidden></div></div>
+  <p class="pt-audio-note" hidden></p>
+  <section id="pt-fold-detail" class="pt-detail" aria-labelledby="pt-detail-title" hidden>
+    <header class="pt-detail-head"><h3 id="pt-detail-title"></h3><div class="pt-actions"><button type="button" data-zoom-fold>Zoom here</button><button type="button" data-close-fold>Close</button></div></header>
+    <div class="pt-detail-entries"></div>
+  </section>
+  <footer class="pt-footer">
+    <div class="pt-actions">
+      <button class="pt-primary" type="button" data-copy="all">Copy conversation</button>
+      <button type="button" data-copy="picks" hidden>Copy selected</button>
+      <button type="button" class="pt-quiet" data-clear hidden>Clear selection</button>
+      <button type="button" class="pt-quiet" data-preview-toggle aria-expanded="false">Preview copy</button>
+    </div>
+    <p class="pt-help">Drag the time window above. Select passages or highlight words in any column.</p>
+    <output class="pt-receipt" aria-live="polite"></output>
+    <div class="pt-copy-preview" hidden><label><span data-preview-label>Conversation</span><textarea rows="5" readonly aria-label="Conversation copy preview" spellcheck="false"></textarea></label></div>
+  </footer>
+  <aside class="pt-original" aria-label="Original source" hidden>
+    <div class="pt-origin-head"><strong></strong><button type="button" data-close aria-label="Close source preview">×</button></div>
+    <div class="pt-origin-media"></div><span class="pt-origin-note"></span>
+  </aside>
+</section>
+<style>
+#daybook-columns {color-scheme:light dark;--pt-paper:light-dark(#fffdf8,#202420);--pt-soft:light-dark(#f6f5ed,#292d28);--pt-ink:light-dark(#253329,#e8ede4);--pt-dim:light-dark(#59665b,#adb9ae);--pt-edge:light-dark(#d8ded1,#49534a);--pt-tick:light-dark(#e9ebdf,#343c34);--pt-focus:light-dark(#355f48,#a4c5aa);--pt-action:light-dark(#264b39,#bbd9bb);--pt-action-ink:light-dark(#fffdf7,#172b1c);--pt-mic:light-dark(#90465c,#efadbd);--pt-sys:light-dark(#50578e,#bbc4fb);--pt-save:light-dark(#3e704b,#acd8ad);color:var(--pt-ink);background:var(--pt-paper);border:1px solid var(--pt-edge);border-radius:15px;position:relative;isolation:isolate;container-type:inline-size;font:15px/1.45 "Inter",-apple-system,BlinkMacSystemFont,sans-serif}
+#daybook-columns * {box-sizing:border-box}
+#daybook-columns [hidden] {display:none!important}
+#daybook-columns h2,#daybook-columns h3,#daybook-columns p,#daybook-columns blockquote {margin:0}
+#daybook-columns button,#daybook-columns input,#daybook-columns textarea {font:inherit;color:inherit}
+#daybook-columns button {border:1px solid var(--pt-edge);border-radius:7px;background:var(--pt-paper);padding:6px 11px;cursor:pointer}
+#daybook-columns button:disabled {opacity:.45;cursor:default}
+#daybook-columns button:hover:enabled {border-color:var(--pt-focus)}
+#daybook-columns :focus-visible {outline:2px solid var(--pt-focus);outline-offset:2px}
+#daybook-columns .pt-title,#daybook-columns .pt-tools,#daybook-columns .pt-fields,#daybook-columns .pt-actions,#daybook-columns .pt-origin-head {display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap}
+#daybook-columns .pt-title {padding:17px 24px 13px;justify-content:space-between;border-bottom:1px solid var(--pt-edge)}
+#daybook-columns .pt-brand {display:block;font:500 15px Georgia,serif;color:var(--pt-focus);margin-bottom:2px}
+#daybook-columns h2 {font:normal 29px/1.2 Georgia,serif;letter-spacing:-.7px}
+#daybook-columns .pt-sample,#daybook-columns .pt-ticks,#daybook-columns .pt-stamp,#daybook-columns .pt-clock-label,#daybook-columns .pt-help,#daybook-columns .pt-origin-note {font:normal 12px/1.45 "Inter",-apple-system,sans-serif;color:var(--pt-dim)}
+#daybook-columns .pt-sample,#daybook-columns .pt-ticks,#daybook-columns .pt-fields input,#daybook-columns .pt-stamp,#daybook-columns .pt-clock-label {font-variant-numeric:tabular-nums}
+#daybook-columns .pt-range {padding:10px 24px 7px;background:var(--pt-soft);border-bottom:1px solid var(--pt-edge)}
+#daybook-columns .pt-tools {justify-content:space-between;margin-bottom:7px}
+#daybook-columns .pt-fields {gap:6px;flex-wrap:wrap;color:var(--pt-dim)}
+#daybook-columns .pt-fields label {font-size:12px}
+#daybook-columns .pt-fields input {width:79px;text-align:center;background:var(--pt-paper);border:1px solid var(--pt-edge);border-radius:5px;padding:4px 0;font:500 13px/1.3 ui-monospace,monospace;color:var(--pt-ink)}
+#daybook-columns .pt-quiet {font-size:13px;border-color:transparent;background:transparent;color:var(--pt-dim);padding:4px 7px}
+#daybook-columns .pt-ruler {margin:0 5px;position:relative;height:32px;touch-action:none;cursor:crosshair}
+#daybook-columns .pt-bands {position:absolute;inset:4px 0;background:var(--pt-paper);border-radius:4px;overflow:hidden}
+#daybook-columns .pt-band {position:absolute;height:4px;background:var(--pt-color);border-radius:2px;opacity:.8}
+#daybook-columns [data-lane=mic] {--pt-color:var(--pt-mic)}
+#daybook-columns [data-lane=sys] {--pt-color:var(--pt-sys)}
+#daybook-columns [data-lane=save] {--pt-color:var(--pt-save)}
+#daybook-columns .pt-window {position:absolute;top:1px;bottom:1px;border-block:1px solid var(--pt-focus);background:color-mix(in srgb,var(--pt-focus) 10%,transparent);pointer-events:none}
+#daybook-columns .pt-handle {appearance:none;-webkit-appearance:none;position:absolute;top:0;left:-6px;width:calc(100% + 12px);height:32px;margin:0;outline:0;background:transparent;pointer-events:none}
+#daybook-columns .pt-handle::-webkit-slider-runnable-track {height:32px;background:transparent}
+#daybook-columns .pt-handle::-moz-range-track {height:32px;background:transparent}
+#daybook-columns .pt-handle::-webkit-slider-thumb {appearance:none;-webkit-appearance:none;width:12px;height:32px;border:2px solid var(--pt-paper);border-radius:4px;background:var(--pt-focus);pointer-events:auto;cursor:ew-resize}
+#daybook-columns .pt-handle::-moz-range-thumb {width:10px;height:28px;border:2px solid var(--pt-paper);border-radius:4px;background:var(--pt-focus);pointer-events:auto;cursor:ew-resize}
+#daybook-columns .pt-handle:focus-visible::-webkit-slider-thumb {outline:2px solid var(--pt-focus);outline-offset:1px}
+#daybook-columns .pt-ticks {position:relative;display:flex;justify-content:space-between;align-items:center;margin:0 5px;user-select:none}
+#daybook-columns .pt-ticks span:nth-child(2),#daybook-columns .pt-ticks span:nth-child(3),#daybook-columns .pt-ticks span:nth-child(4) {position:absolute;left:25%;transform:translateX(-50%)}
+#daybook-columns .pt-ticks span:nth-child(3) {left:50%}
+#daybook-columns .pt-ticks span:nth-child(4) {left:75%}
+#daybook-columns .pt-message {color:var(--pt-mic);margin-top:5px}
+#daybook-columns .pt-zooms {display:flex;align-items:center;gap:2px}
+#daybook-columns .pt-zooms button {font-size:12px;padding:4px 8px;color:var(--pt-dim);background:transparent;border-color:transparent}
+#daybook-columns .pt-zooms button[aria-pressed=true] {background:var(--pt-paper);border-color:var(--pt-edge);color:var(--pt-ink)}
+#daybook-columns .pt-scroll {position:relative;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;border-bottom:1px solid var(--pt-edge)}
+#daybook-columns .pt-grid {display:grid;width:100%;min-width:var(--pt-min,0);grid-template-columns:var(--pt-gutter,64px) repeat(var(--pt-count,3),minmax(0,1fr));align-items:stretch}
+#daybook-columns .pt-extent:not(:empty) {display:block;margin-top:4px;font-size:12px;color:var(--pt-dim)}
+#daybook-columns .pt-clock {position:sticky;left:0;z-index:2;background:var(--pt-paper)}
+#daybook-columns .pt-lane {min-width:0;border-left:1px solid var(--pt-edge)}
+#daybook-columns .pt-head {height:40px;display:flex;align-items:center;gap:6px;padding:0 9px;position:sticky;top:0;z-index:1;background:var(--pt-paper);border-bottom:1px solid var(--pt-edge);user-select:none}
+#daybook-columns .pt-clock .pt-head {padding-left:9px;color:var(--pt-dim);font-size:11px}
+#daybook-columns .pt-head h3 {min-width:0;font:600 14px/1.2 "Inter",-apple-system,sans-serif;color:var(--pt-color)}
+#daybook-columns .pt-head .pt-lane-copy {margin-left:auto;border-color:transparent;color:var(--pt-dim);font-size:12px;padding:3px 4px}
+#daybook-columns .pt-check {width:14px;height:14px;flex:none;margin:0;accent-color:var(--pt-color);cursor:pointer}
+#daybook-columns .pt-track {position:relative;min-width:0;overflow:clip}
+#daybook-columns .pt-unrecorded {position:absolute;inset:0 0 auto;height:0;background:var(--pt-soft);pointer-events:none}
+#daybook-columns .pt-clock-label {position:absolute;right:6px;white-space:nowrap;font-size:11px;transform:translateY(-50%)}
+#daybook-columns .pt-line {position:absolute;left:0;right:0;border-top:1px solid var(--pt-tick);pointer-events:none}
+#daybook-columns .pt-dot {position:absolute;left:1px;width:5px;height:5px;transform:translateY(-50%);background:var(--pt-color);border-radius:50%;pointer-events:none}
+#daybook-columns .pt-span {position:absolute;left:3px;width:2px;background:var(--pt-color);border-radius:2px;opacity:.36;pointer-events:none}
+#daybook-columns .pt-bundle {position:absolute;left:8px;min-width:0;transform-origin:top left}
+#daybook-columns .pt-bundle[data-lens] {cursor:zoom-in}
+#daybook-columns .pt-entry {padding:3px 5px 5px;border-radius:5px;min-width:0}
+#daybook-columns .pt-entry + .pt-entry {margin-top:4px}
+#daybook-columns .pt-entry[data-picked] {background:color-mix(in srgb,var(--pt-color) 9%,var(--pt-paper))}
+#daybook-columns .pt-meta {display:flex;align-items:center;gap:5px;user-select:none}
+#daybook-columns .pt-stamp {color:var(--pt-color);font-size:11px}
+#daybook-columns .pt-body {margin-top:3px;overflow-wrap:anywhere;font:normal 17px/1.35 Georgia,serif}
+#daybook-columns .pt-lane[data-lane=save] .pt-body {font:normal 15px/1.42 "Inter",-apple-system,sans-serif}
+#daybook-columns .pt-fold {position:absolute;right:4px;z-index:1;display:flex;align-items:flex-start;justify-content:flex-end;color:var(--pt-color)}
+#daybook-columns .pt-fold[data-picked] {background:color-mix(in srgb,var(--pt-color) 9%,var(--pt-paper));border-radius:4px}
+#daybook-columns .pt-fold button.pt-fold-open {display:block;white-space:nowrap;padding:1px 5px;border-color:transparent;background:var(--pt-soft);font:500 12px/18px system-ui}
+#daybook-columns .pt-fold button.pt-fold-open[aria-expanded=true] {border-color:var(--pt-color)}
+#daybook-columns .pt-fold .pt-origin {flex:none;margin:0}
+#daybook-columns .pt-detail {padding:10px 18px 12px;background:var(--pt-soft);border-bottom:1px solid var(--pt-edge)}
+#daybook-columns .pt-detail-head {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+#daybook-columns .pt-detail-head h3 {font:500 15px/1.35 system-ui}
+#daybook-columns .pt-detail-entries {display:grid;gap:5px}
+#daybook-columns .pt-detail-entries .pt-entry {border-left:2px solid var(--pt-color);padding-left:10px}
+#daybook-columns .pt-origin {display:inline-flex;align-items:center;justify-content:center;width:25px;height:22px;vertical-align:middle;margin-inline-start:4px;padding:0;color:var(--pt-save);background:var(--pt-soft)}
+#daybook-columns .pt-icon {display:inline-block;position:relative;width:16px;height:16px;flex:none}
+#daybook-columns .pt-icon::before,#daybook-columns .pt-icon::after {content:"";position:absolute;box-sizing:border-box}
+#daybook-columns .pt-icon.monitor::before {inset:2px 0 4px;border:1.5px solid;border-radius:2px}
+#daybook-columns .pt-icon.monitor::after {inset:12px 4px 1px;border-bottom:1.5px solid;background:linear-gradient(currentColor,currentColor) center top / 1.5px 2px no-repeat}
+#daybook-columns .pt-icon.image::before {inset:4px 3px 1px 0;border:1.5px solid;border-radius:2px}
+#daybook-columns .pt-icon.image::after {inset:1px 0 4px 3px;border:1.5px solid;border-radius:2px;background:var(--pt-soft)}
+#daybook-columns .pt-icon.clip::before {inset:2px 2px 0;border:1.5px solid;border-radius:2px;background:linear-gradient(currentColor,currentColor) center 7px / 6px 1px no-repeat}
+#daybook-columns .pt-icon.clip::after {inset:0 5px 11px;border:1.5px solid;background:var(--pt-soft);border-radius:2px}
+#daybook-columns .pt-empty {position:absolute;left:var(--pt-gutter,64px);right:0;top:55px;padding:12px 16px;background:var(--pt-paper);color:var(--pt-dim)}
+#daybook-columns .pt-empty strong {display:block;color:var(--pt-ink);font:normal 21px Georgia,serif;margin-bottom:5px}
+#daybook-columns .pt-empty button {display:block;margin-top:6px}
+#daybook-columns .pt-audio-note {padding:7px 20px;background:var(--pt-soft);color:var(--pt-dim);font-size:12px;font-variant-numeric:tabular-nums}
+#daybook-columns .pt-footer {padding:12px 20px 14px}
+#daybook-columns .pt-actions {gap:6px}
+#daybook-columns .pt-actions button {font-size:13px}
+#daybook-columns .pt-actions .pt-primary {background:var(--pt-action);border-color:var(--pt-action);color:var(--pt-action-ink)}
+#daybook-columns .pt-help,#daybook-columns .pt-receipt:not(:empty) {display:block;margin-top:6px}
+#daybook-columns .pt-receipt {font-size:13px;color:var(--pt-focus)}
+#daybook-columns .pt-copy-preview {margin-top:8px}
+#daybook-columns .pt-copy-preview label {font-size:13px;color:var(--pt-dim)}
+#daybook-columns .pt-copy-preview textarea {display:block;width:100%;margin-top:4px;padding:9px;background:var(--pt-soft);color:var(--pt-ink);border:1px solid var(--pt-edge);border-radius:6px;font:normal 14px/1.55 ui-monospace,monospace}
+#daybook-columns .pt-original {position:absolute;z-index:9;width:min(334px,calc(100% - 14px));padding:9px;border:1px solid var(--pt-edge);border-radius:10px;background:var(--pt-paper);box-shadow:0 8px 25px #1b241d30}
+#daybook-columns .pt-origin-head {justify-content:space-between;flex-wrap:nowrap;font-size:14px;margin-bottom:6px}
+#daybook-columns .pt-origin-head button {font-size:18px;line-height:1;padding:2px 6px}
+#daybook-columns .pt-origin-media img {display:block;max-width:100%;max-height:205px;object-fit:contain}
+#daybook-columns .pt-original[data-pinned] {width:min(560px,calc(100% - 14px))}
+#daybook-columns .pt-original[data-pinned] img {max-height:290px}
+#daybook-columns .pt-origin-media blockquote {padding:7px 10px;border-left:2px solid var(--pt-save);white-space:pre-wrap}
+#daybook-columns .pt-origin-note {display:block;margin-top:5px}
+::highlight(daybook-column-excerpts) {background-color:Highlight;color:HighlightText}
+@container(max-width:560px) {
+  #daybook-columns .pt-title,#daybook-columns .pt-range,#daybook-columns .pt-footer {padding-inline:11px}
+  #daybook-columns .pt-title {gap:5px;padding-block:11px}
+  #daybook-columns h2 {font-size:24px}
+  #daybook-columns .pt-ticks[data-days] span:nth-child(even) {display:none}
+}
+@media(pointer:coarse) {
+  #daybook-columns .pt-origin,#daybook-columns .pt-head .pt-lane-copy {min-width:31px;min-height:30px}
+  #daybook-columns .pt-check {width:17px;height:17px}
+}
+</style>
+<script>
+function mountParallelTranscript(root, sample, pictures, remember = false) {
+  const find = selector => root.querySelector(selector);
+  const lanes = { mic: 'Microphone', sys: 'System audio', save: 'Screen & clipboard' };
+  const duration = 600;
+  const origin = (10 * 60 + 14) * 60;
+  const maxOffset = Number.MAX_SAFE_INTEGER - origin;
+  const compactNumber = new Intl.NumberFormat('en', {notation:'compact', maximumFractionDigits:1});
+  function stamp(offset) {
+    const seconds = origin + offset;
+    const days = Math.floor(seconds / 86400);
+    const clock = [Math.floor(seconds / 3600) % 24, Math.floor(seconds / 60) % 60, seconds % 60]
+      .map(n => String(n).padStart(2, '0')).join(':');
+    return (days ? '+' + days + 'd ' : '') + clock;
+  }
+  function tickLabel(t, span) {
+    const days = Math.floor((origin + t) / 86400), full = stamp(t);
+    if (!days) return full;
+    const day = '+' + compactNumber.format(days) + 'd';
+    return span >= 3*86400 ? day : day + ' ' + full.split(' ')[1];
+  }
+  const picks = new Map();
+  let start = 0, until = 30, visible = [], layoutFrame = 0, previewScope = 'auto';
+  let horizon = duration, heldHorizon = 0;
+  const scroll = find('.pt-scroll'), grid = find('.pt-grid'), ruler = find('.pt-ruler');
+  const preview = find('.pt-copy-preview'), area = preview.querySelector('textarea');
+  const detail = find('.pt-detail'), detailEntries = find('.pt-detail-entries');
+  const folds = new Map();
+  let openFold = null;
+  const original = find('.pt-original');
+  let originButton = null, pinned = false, hideTimer = 0;
+
+  function element(tag, css, text) {
+    const el = document.createElement(tag);
+    if (css) el.className = css;
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+  function button(css, text, name) {
+    const el = element('button', css, text);
+    el.type = 'button';
+    if (name) el.setAttribute('aria-label', name);
+    return el;
+  }
+  function checkbox(name) {
+    const el = element('input', 'pt-check');
+    el.type = 'checkbox';
+    el.setAttribute('aria-label', name);
+    return el;
+  }
+
+  // Fictional continuation of the same print review used by the one-minute studies.
+  const cover = sample.find(e => e.id === 'cover');
+  const later = [
+    {id:'room', at:76, end:83, lane:'mic', text:'Can we give the title a little more room at the top?'},
+    {id:'margin', at:85, end:94, lane:'sys', text:'Yes. Take it from the bottom margin.'},
+    {id:'margin-note', at:91, end:91, lane:'save', name:'Pasted text', text:'Move the title up by 4 mm.'},
+    {id:'warmth', at:145, end:155, lane:'sys', text:'The paper looks warmer in this light.'},
+    {id:'daylight', at:150, end:158, lane:'mic', text:'I’ll put the proof next to the window.'},
+    {id:'binding', at:175, end:181, lane:'mic', text:'And the binding?'},
+    {id:'thread', at:181, end:188, lane:'sys', text:'Green thread. Same as the first edition.'},
+    {id:'thread-ok', at:189, end:193, lane:'mic', text:'Good. Keep the green.'},
+    {id:'thread-note', at:190, end:190, lane:'save', name:'Pasted text', text:'Binding · forest green thread'},
+    {id:'final-cover', at:312, end:322, lane:'mic', text:'Here’s the cover with the extra space.'},
+    {id:'final-look', at:312, end:318, lane:'sys', text:'That reads better already.'},
+    {id:'read-title', at:325, end:331, lane:'sys', text:'The title has room to breathe.'},
+    {id:'second-proof', at:329, end:329, lane:'save', name:'Pasted image', text:'Print proof due Friday', asset:'card'},
+    {id:'quantity', at:431, end:444, lane:'sys', text:'Can the printer hold two hundred copies for us?'},
+    {id:'quantity-ok', at:438, end:448, lane:'mic', text:'Yes. I’ll confirm the quantity this afternoon.'},
+    {id:'quantity-note', at:446, end:446, lane:'save', name:'Pasted text', text:'First run · 200 copies'},
+    {id:'ready', at:548, end:558, lane:'mic', text:'I’ve marked this proof as the one to send.'},
+    {id:'friday', at:567, end:575, lane:'sys', text:'Great. I’ll look for it on Friday.'},
+    {id:'goodbye', at:585, end:592, lane:'mic', text:'See you at the press check.'}
+  ];
+  const entries = [...sample, ...later].filter(e => e.id !== cover.id && e.text.trim()).map(e => ({
+    ...e, label: e.name || lanes[e.lane], type: e.lane === 'save' ? (e.asset ? 'image' : 'clip') : 'audio'
+  }));
+  const screenVisits = [[6,16], [40,46], [146,160], [312,346], [544,560]];
+  let visit = null;
+  for (let t = 0; t < duration; t += 2) {
+    const seen = screenVisits.some(([first,last]) => t >= first && t <= last);
+    if (!seen) { visit = null; continue; }
+    if (!visit) {
+      visit = {...cover, id: 'cover-' + t, type: 'monitor', label: 'On screen', at: t, end: t, samples: 0};
+      entries.push(visit);
+    }
+    visit.end = t;
+    visit.samples++;
+  }
+  entries.sort((a, b) => a.at - b.at);
+  const byId = new Map(entries.map(e => [e.id, e]));
+  const audioWindows = [[0,55],[70,duration]];
+  function intersects(e) {
+    if (e.at >= until || !e.text.trim()) return false;
+    if (e.type === 'monitor') return e.end >= start;
+    return e.end > e.at ? e.end > start : e.at >= start;
+  }
+  const clippedStart = e => Math.max(start, e.at);
+  const clippedEnd = e => Math.min(until, e.end);
+  const spanLabel = e => e.type === 'monitor' ? stamp(e.at) + '–' + stamp(e.end) : stamp(e.at);
+  const full = e => [0, e.text.length];
+
+  function drawOverview() {
+    const bands = find('.pt-bands');
+    bands.replaceChildren();
+    for (const e of entries) {
+      const band = element('span', 'pt-band');
+      band.dataset.lane = e.lane;
+      Object.assign(band.style, {
+        top: ({mic: 3, sys: 10, save: 17}[e.lane]) + 'px',
+        left: (e.at / horizon * 100) + '%',
+        width: 'max(2px,' + ((e.end - e.at) / horizon * 100) + '%)'
+      });
+      bands.append(band);
+    }
+    const ticks = find('.pt-ticks');
+    ticks.toggleAttribute('data-days', origin + horizon >= 86400);
+    ticks.querySelectorAll('span').forEach((el,i) => {
+      const t = Math.round(i / 4 * horizon), label = tickLabel(t,horizon);
+      el.textContent = label.replace(/:00$/, '');
+    });
+  }
+
+  function closeOriginal(restoreFocus = false) {
+    clearTimeout(hideTimer);
+    const old = originButton;
+    pinned = false;
+    originButton = null;
+    original.hidden = true;
+    original.removeAttribute('data-pinned');
+    old?.setAttribute('aria-expanded', 'false');
+    if (restoreFocus && old?.isConnected) {
+      old.focus({preventScroll: true});
+      // Keyboard focus normally previews a source. Escape explicitly dismissed this one.
+      if (originButton === old) closeOriginal();
+    }
+  }
+  function placeOriginal() {
+    if (!originButton || original.hidden) return;
+    const b = originButton.getBoundingClientRect(), view = root.getBoundingClientRect();
+    const width = original.offsetWidth, height = original.offsetHeight;
+    const leftEdge = Math.max(view.left, 0) + 5;
+    const rightEdge = Math.min(view.right, document.documentElement.clientWidth) - 5;
+    const left = Math.max(leftEdge, Math.min(b.right - width, rightEdge - width));
+    const lower = Math.min(view.bottom, window.innerHeight) - 5;
+    const above = Math.max(view.top, 0) + 5;
+    const top = b.bottom + height + 6 <= lower ? b.bottom + 5 : Math.max(above, b.top - height - 5);
+    original.style.left = (left - view.left) + 'px';
+    original.style.top = (top - view.top) + 'px';
+  }
+  function showOriginal(e, trigger, pin = false) {
+    clearTimeout(hideTimer);
+    if (pinned && !pin && originButton !== trigger) return;
+    if (originButton !== trigger) originButton?.setAttribute('aria-expanded', 'false');
+    originButton = trigger;
+    pinned = pinned || pin;
+    original.toggleAttribute('data-pinned', pinned);
+    trigger.setAttribute('aria-expanded', 'true');
+    find('.pt-origin-head strong').textContent = e.type === 'monitor' ? 'Original screen capture' : (e.asset ? 'Original clipboard image' : 'Original clipboard text');
+    const media = find('.pt-origin-media');
+    media.replaceChildren();
+    if (e.asset) {
+      const img = element('img');
+      img.alt = e.text;
+      img.addEventListener('load', placeOriginal, {once: true});
+      img.src = pictures[e.asset];
+      media.append(img);
+    } else {
+      media.append(element('blockquote', '', e.text));
+    }
+    find('.pt-origin-note').textContent = e.type === 'monitor'
+      ? 'First seen ' + stamp(e.at) + ' · last seen ' + stamp(e.end) + ' · ' + e.samples + ' checks. Image from the first check.'
+      : 'Pasted at ' + stamp(e.at);
+    original.hidden = false;
+    placeOriginal();
+  }
+  function hideSoon() {
+    clearTimeout(hideTimer);
+    if (!pinned) hideTimer = setTimeout(() => {
+      if (!original.matches(':hover') && !original.contains(document.activeElement)) closeOriginal();
+    }, 160);
+  }
+  original.addEventListener('pointerenter', () => clearTimeout(hideTimer));
+  original.addEventListener('pointerleave', hideSoon);
+  find('[data-close]').addEventListener('click', () => closeOriginal(true));
+  root.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !original.hidden) { e.preventDefault(); closeOriginal(true); }
+    else if (e.key === 'Escape' && !detail.hidden) { e.preventDefault(); closeDetail(true); }
+  });
+  document.addEventListener('pointerdown', e => {
+    if (!original.hidden && !original.contains(e.target) && !originButton?.contains(e.target)) closeOriginal();
+  });
+  scroll.addEventListener('scroll', () => { if (!original.hidden) closeOriginal(); }, {passive:true});
+  function sourceButton(e) {
+    const trigger = button('pt-origin', '', 'Preview original ' + e.label.toLowerCase() + ' at ' + stamp(e.at));
+    trigger.dataset.original = e.id;
+    trigger.setAttribute('aria-expanded', 'false');
+    const glyph = element('span', 'pt-icon ' + e.type);
+    glyph.setAttribute('aria-hidden','true');
+    trigger.append(glyph);
+    trigger.addEventListener('pointerenter', ev => {if (ev.pointerType !== 'touch') showOriginal(e, trigger);});
+    trigger.addEventListener('pointerleave', hideSoon);
+    trigger.addEventListener('focus', () => showOriginal(e, trigger));
+    trigger.addEventListener('blur', hideSoon);
+    trigger.addEventListener('click', () => {
+      if (pinned && originButton === trigger) closeOriginal();
+      else showOriginal(e, trigger, true);
+    });
+    return trigger;
+  }
+
+  let laneAnchors = {};
+  function pickEntry(e, checked, extend) {
+    const same = visible.filter(x => x.lane === e.lane);
+    const last = same.findIndex(x => x.id === laneAnchors[e.lane]);
+    const index = same.indexOf(e);
+    const affected = extend && last >= 0 ? same.slice(Math.min(last,index), Math.max(last,index)+1) : [e];
+    for (const item of affected) {
+      if (checked) picks.set(item.id, full(item)); else picks.delete(item.id);
+    }
+    laneAnchors[e.lane] = e.id;
+    updatePicks();
+  }
+  function makeEntry(e) {
+    const article = element('article', 'pt-entry');
+    article.dataset.entry = e.id;
+    const meta = element('div', 'pt-meta');
+    const box = checkbox('Select ' + e.label + ' at ' + stamp(e.at));
+    box.addEventListener('click', ev => pickEntry(e, box.checked, ev.shiftKey));
+    const timing = e.type === 'monitor' ? spanLabel(e) : stamp(e.at) + (e.lane === 'save' ? ' · ' + e.label : '');
+    meta.append(box, element('span','pt-stamp', timing));
+    const body = element('div','pt-body');
+    body.append(element('span', 'pt-text', e.text));
+    if (e.lane === 'save') body.append(sourceButton(e));
+    article.append(meta, body);
+    return article;
+  }
+  const lastSelected = () => visible.filter(e => picks.has(e.id));
+  function copyRows(scope) {
+    let included = visible;
+    if (scope === 'auto') scope = lastSelected().length ? 'picks' : 'all';
+    if (scope === 'picks') included = lastSelected();
+    else if (scope !== 'all') {
+      const lane = visible.filter(e => e.lane === scope);
+      const chosen = lane.filter(e => picks.has(e.id));
+      included = chosen.length ? chosen : lane;
+    }
+    return included.map(e => {
+      const [lo, hi] = scope === 'all' ? full(e) : (picks.get(e.id) || full(e));
+      return '[' + spanLabel(e) + '] ' + e.label + ': ' + e.text.slice(lo,hi).trim();
+    });
+  }
+  function showPreview() {
+    if ((previewScope === 'picks' && !lastSelected().length) ||
+        (previewScope in lanes && !visible.some(e => e.lane === previewScope))) previewScope = 'auto';
+    area.value = copyRows(previewScope).join('\n');
+    find('[data-preview-label]').textContent = previewScope in lanes ? lanes[previewScope] :
+      (previewScope === 'picks' || (previewScope === 'auto' && lastSelected().length) ? 'Selected passages' : 'Conversation');
+  }
+  function updatePicks() {
+    const highlights = [];
+    for (const article of root.querySelectorAll('article[data-entry]')) {
+      const e = byId.get(article.dataset.entry);
+      const selected = picks.get(e.id);
+      article.toggleAttribute('data-picked', !!selected);
+      article.querySelector('input').checked = !!selected;
+      if (selected && (selected[0] !== 0 || selected[1] !== e.text.length)) {
+        const node = article.querySelector('.pt-text').firstChild;
+        const range = document.createRange();
+        range.setStart(node, selected[0]); range.setEnd(node, selected[1]);
+        highlights.push(range);
+      }
+    }
+    if (globalThis.CSS?.highlights && globalThis.Highlight) {
+      CSS.highlights.set('daybook-column-excerpts',new Highlight(...highlights));
+    }
+    for (const group of folds.values()) {
+      group.mark.toggleAttribute('data-picked', group.items.some(e => picks.has(e.id)));
+    }
+    for (const head of grid.querySelectorAll('.pt-lane .pt-head')) {
+      const key = head.parentElement.dataset.lane;
+      const all = visible.filter(e => e.lane === key);
+      const chosen = all.filter(e => picks.has(e.id));
+      const box = head.querySelector('input');
+      box.checked = all.every(e => picks.get(e.id)?.[0] === 0 && picks.get(e.id)?.[1] === e.text.length);
+      box.indeterminate = chosen.length > 0 && !box.checked;
+      head.querySelector('button').setAttribute('aria-label',(chosen.length ? 'Copy selected from ' : 'Copy column ') + lanes[key]);
+    }
+    const selected = lastSelected();
+    const pickButton = find('[data-copy=picks]');
+    pickButton.textContent = 'Copy selected (' + selected.length + ')';
+    pickButton.hidden = !selected.length;
+    find('[data-clear]').hidden = !selected.length;
+    find('[data-copy=all]').disabled = !visible.length;
+    find('[data-preview-toggle]').disabled = !visible.length;
+    find('.pt-receipt').textContent = '';
+    if (!preview.hidden) showPreview();
+  }
+
+  function closeDetail(restore = false) {
+    const trigger = folds.get(openFold)?.trigger;
+    trigger?.setAttribute('aria-expanded', 'false');
+    openFold = null;
+    detail.hidden = true;
+    detailEntries.replaceChildren();
+    if (restore) trigger?.focus({preventScroll:true});
+  }
+  function readGroup(key) {
+    const group = folds.get(key);
+    if (!group) return;
+    closeDetail();
+    openFold = key;
+    group.trigger.setAttribute('aria-expanded', 'true');
+    const last = Math.max(...group.items.map(e => e.end));
+    find('#pt-detail-title').textContent = lanes[group.lane] + ' · ' + stamp(group.items[0].at) +
+      (last === group.items[0].at ? '' : '–' + stamp(last));
+    detailEntries.dataset.lane = group.lane;
+    detailEntries.replaceChildren(...group.items.map(makeEntry));
+    detail.hidden = false;
+    updatePicks();
+    find('[data-close-fold]').focus({preventScroll:true});
+    detail.scrollIntoView({block:'nearest'});
+  }
+  find('[data-close-fold]').addEventListener('click', () => closeDetail(true));
+  find('[data-zoom-fold]').addEventListener('click', () => {
+    const group = folds.get(openFold);
+    if (!group) return;
+    const first = Math.max(0, clippedStart(group.items[0]) - 2);
+    const last = clippedStart(group.items[group.items.length - 1]);
+    setBounds(first, Math.max(first + 10, last + 5));
+    closeDetail();
+    find('[data-zoom=in]').focus({preventScroll:true});
+    scroll.scrollIntoView({block:'nearest'});
+  });
+  function addReadingTargets(track, points, atY) {
+    const lane = track.parentElement.dataset.lane;
+    const groups = [];
+    for (const point of points) {
+      const last = groups[groups.length - 1];
+      if (last && atY(point.at) - atY(last[0].at) < 30) last.push(point);
+      else groups.push([point]);
+    }
+    for (const group of groups) {
+      const items = group.flatMap(p => p.items);
+      const key = items.map(e => e.id).join(',');
+      const mark = element('div','pt-fold');
+      mark.style.top = atY(group[0].at) + 'px';
+      const trigger = button('pt-fold-open', items.length === 1 ? '⋯' : '⋯ ' + items.length,
+        'Read ' + items.length + (items.length === 1 ? ' passage' : ' passages') + ' from ' + lanes[lane] + ' at ' + stamp(group[0].at));
+      trigger.dataset.fold = key;
+      trigger.setAttribute('aria-controls', detail.id);
+      trigger.setAttribute('aria-expanded', String(openFold === key));
+      trigger.addEventListener('click', () => openFold === key ? closeDetail(true) : readGroup(key));
+      mark.append(trigger);
+      track.append(mark);
+      folds.set(key, {lane, items, mark, trigger});
+      mark.toggleAttribute('data-picked', items.some(e => picks.has(e.id)));
+      for (const point of group) point.bundle.dataset.lens = key;
+    }
+  }
+  grid.addEventListener('click', event => {
+    const bundle = event.target.closest('.pt-bundle[data-lens]');
+    if (bundle && !event.target.closest('input,button') && window.getSelection()?.isCollapsed) {
+      readGroup(bundle.dataset.lens);
+    }
+  });
+
+  // All positions and durations use this single linear scale. Only the type
+  // shrinks to fit tight gaps. Reading targets leave each original at its time.
+  function measure() {
+    if (!grid.clientWidth) return;
+    const height = scroll.clientWidth < 560 ? 400 : 480;
+    const span = until - start, pixels = height / span;
+    const atY = t => 10 + (t - start) * pixels;
+    // Shrink gently in sparse columns. Tighter neighbors can require a smaller
+    // size locally, so their letters fit without moving either start time.
+    const nominalSize = Math.min(1, (30 / span) ** (1/6));
+    const steps = [1,2,5,10,15,30,60,120,300,600,900,1800,3600,7200,21600,43200,86400];
+    const desiredStep = 40 / pixels;
+    const step = steps.find(n => n >= desiredStep) || 86400 * 10 ** Math.ceil(Math.log10(desiredStep / 86400));
+    const ticks = [start];
+    for (let t = Math.ceil(start / step) * step; t < until; t += step) {
+      if (atY(t) - atY(start) >= 26 && atY(until) - atY(t) >= 26) ticks.push(t);
+    }
+    ticks.push(until);
+    folds.clear();
+    for (const track of grid.querySelectorAll('.pt-track')) {
+      track.style.height = (height + 40) + 'px';
+      const lines = track.querySelector('.pt-lines');
+      const isClock = !!track.closest('.pt-clock');
+      lines.replaceChildren();
+      if (!isClock && until > duration) {
+        const after = element('div', 'pt-unrecorded');
+        after.style.top = atY(Math.max(start, duration)) + 'px';
+        after.style.height = Math.min(span, until - duration) * pixels + 'px';
+        lines.append(after);
+      }
+      for (const t of ticks) {
+        const mark = element('span', isClock ? 'pt-clock-label' : 'pt-line', isClock ? tickLabel(t,span) : undefined);
+        mark.dataset.at = t;
+        mark.style.top = atY(t) + 'px';
+        lines.append(mark);
+      }
+      if (isClock) continue;
+      for (const mark of track.querySelectorAll('.pt-span,.pt-dot')) {
+        const t = Number(mark.dataset.at);
+        mark.style.top = atY(t) + 'px';
+        if (mark.dataset.end) mark.style.height = (Number(mark.dataset.end) - t) * pixels + 'px';
+      }
+      for (const old of track.querySelectorAll('.pt-fold')) old.remove();
+      const bundles = Array.from(track.querySelectorAll('.pt-bundle'));
+      const small = [];
+      const available = track.clientWidth - 16 - (nominalSize < .62 ? 42 : 0);
+      const textWidth = Math.min(1500, Math.max(50, available) / nominalSize) + 'px';
+      for (const bundle of bundles) {
+        bundle.style.top = atY(Number(bundle.dataset.at)) + 'px';
+        bundle.style.width = textWidth;
+      }
+      const heights = bundles.map(bundle => bundle.offsetHeight);
+      bundles.forEach((bundle,index) => {
+        const at = Number(bundle.dataset.at), top = atY(at);
+        const next = bundles[index + 1];
+        const room = next ? atY(Number(next.dataset.at)) - top : height + 38 - top;
+        const size = Math.min(nominalSize, room / (heights[index] + 4));
+        bundle.style.transform = 'scale(' + size + ')';
+        delete bundle.dataset.lens;
+        if (size < .62) small.push({at, bundle, items: Array.from(bundle.children, el => byId.get(el.dataset.entry))});
+      });
+      addReadingTargets(track, small, atY);
+    }
+    if (openFold && !folds.has(openFold)) closeDetail();
+    if (visible.length) find('.pt-help').textContent = folds.size
+      ? 'Open ⋯ to read small passages at full size. Copy conversation includes every passage in this range.'
+      : 'Drag the overview to choose a time range. Select passages or highlight words in any column.';
+  }
+  function queueMeasure() {
+    cancelAnimationFrame(layoutFrame);
+    layoutFrame = requestAnimationFrame(measure);
+  }
+  function showAudioGap() {
+    const note = find('.pt-audio-note');
+    note.hidden = true;
+    if (!visible.length) return;
+
+    const speech = visible.filter(e => e.type === 'audio');
+    let gapStart = start, gapEnd = start;
+    for (const [first,last] of audioWindows) {
+      let through = Math.max(start, first);
+      const limit = Math.min(until, last);
+      if (through >= limit) continue;
+      function consider(next) {
+        if (next - through > gapEnd - gapStart) {
+          gapStart = through;
+          gapEnd = next;
+        }
+      }
+      for (const e of speech) {
+        if (e.end <= through || e.at >= limit) continue;
+        consider(e.at);
+        through = Math.max(through, e.end);
+      }
+      consider(limit);
+    }
+    if (gapEnd === gapStart || (speech.length && gapEnd - gapStart < 8)) return;
+    note.textContent = stamp(gapStart) + '–' + stamp(gapEnd) + ' · Audio was arriving. No speech was transcribed.';
+    note.hidden = false;
+  }
+  function drawGrid() {
+    closeOriginal();
+    closeDetail();
+    folds.clear();
+    grid.replaceChildren();
+    visible = entries.filter(intersects);
+    showAudioGap();
+    const active = Object.keys(lanes).filter(key => visible.some(e => e.lane === key));
+    const gutter = until + origin >= 86400 ? 100 : 64;
+    scroll.style.setProperty('--pt-gutter', gutter+'px');
+    grid.style.setProperty('--pt-count', Math.max(1,active.length));
+    grid.style.setProperty('--pt-min', active.length < 2 ? '0px' : (gutter + active.length*169)+'px');
+    const clock = element('div','pt-clock'), track = element('div','pt-track');
+    track.append(element('div','pt-lines'));
+    clock.append(element('div','pt-head','Time'),track);grid.append(clock);
+    const empty = find('.pt-empty');
+    empty.hidden = !!active.length;
+    if (!active.length) {
+      empty.replaceChildren(element('strong','','No text in this range'));
+      if (start >= duration) empty.append('The sample recording ended at ' + stamp(duration) + '.');
+      else if (audioWindows.some(([lo,hi]) => lo <= start && hi >= until - 1)) empty.append('Audio was still arriving. No words or screen text were recorded here.');
+      else if (start > 55 && until <= 70) empty.append('The last audio samples arrived at 10:14:55. Input resumed at 10:15:10.');
+      else empty.append('Audio samples cover part of this range. No words or screen text were recorded here.');
+      if (start >= duration) {
+        const reset = button('pt-quiet','Show sample recording');
+        reset.addEventListener('click', () => setBounds(0,duration));
+        empty.append(reset);
+      }
+      const blank = element('div'), space = element('div','pt-track');
+      space.append(element('div','pt-lines'));blank.append(element('div','pt-head'),space);grid.append(blank);
+      find('.pt-help').textContent = 'Drag the overview to choose another time range.';
+      preview.hidden = true;
+      find('[data-preview-toggle]').setAttribute('aria-expanded','false');
+      updatePicks();
+      measure();
+      return;
+    }
+    for (const key of active) {
+      const lane = element('section','pt-lane'), head=element('div','pt-head'), body=element('div','pt-track');
+      lane.dataset.lane=key;lane.setAttribute('aria-label',lanes[key]);
+      const box=checkbox('Select column '+lanes[key]), copy=button('pt-lane-copy','Copy','Copy column '+lanes[key]);
+      const local=visible.filter(e=>e.lane===key);
+      box.addEventListener('change',()=>{
+        for(const e of local){if(box.checked)picks.set(e.id,full(e));else picks.delete(e.id);}
+        updatePicks();
+      });
+      copy.addEventListener('click',()=>copyToClipboard(key));
+      head.append(box,element('h3','',lanes[key]),copy);lane.append(head,body);grid.append(lane);
+      body.append(element('div','pt-lines'));
+      const bundles = new Map();
+      for(const e of local) {
+        const at=clippedStart(e), end=clippedEnd(e);
+        const dot=element('span','pt-dot');
+        dot.dataset.at=at;body.append(dot);
+        if(end>at) {
+          const span=element('div','pt-span');
+          span.dataset.at=at;span.dataset.end=end;body.append(span);
+        }
+        if(!bundles.has(at)) {
+          const bundle=element('div','pt-bundle');bundle.dataset.at=at;
+          bundles.set(at,bundle);body.append(bundle);
+        }
+        bundles.get(at).append(makeEntry(e));
+      }
+    }
+    updatePicks();
+    measure();
+  }
+  let observedWidth = 0;
+  new ResizeObserver(([change])=>{
+    if (observedWidth !== change.contentRect.width) {
+      observedWidth=change.contentRect.width;queueMeasure();if (!original.hidden)placeOriginal();
+    }
+  }).observe(scroll);
+  document.fonts?.ready.then(queueMeasure);
+
+  function setBounds(from,to) {
+    from = Math.max(0, Math.min(maxOffset - 1, Math.round(from)));
+    to = Math.max(from + 1, Math.min(maxOffset, Math.round(to)));
+    const changed = start!==from || until!==to;
+    start=from;until=to;
+    if (changed) previewScope = 'auto';
+    const extent = Math.max(duration, until, heldHorizon);
+    if (horizon !== extent || !find('.pt-bands').childElementCount) {
+      horizon = extent;
+      drawOverview();
+    }
+    for(const [key,val] of [['from',start],['until',until]]) {
+      const field = find('[data-'+key+']');
+      field.value = stamp(val);
+      field.style.width = Math.max(79, Math.min(165, field.value.length * 8 + 12)) + 'px';
+      field.removeAttribute('aria-invalid');
+      const grip=find('[data-grip='+key+']');
+      grip.max=String(horizon);grip.value=String(val);grip.setAttribute('aria-valuetext',stamp(val));
+    }
+    for (const preset of root.querySelectorAll('[data-seconds]')) {
+      preset.setAttribute('aria-pressed', String(until - start === Number(preset.dataset.seconds)));
+    }
+    find('[data-zoom=in]').disabled = until - start === 1;
+    find('[data-zoom=out]').disabled = until - start === maxOffset;
+    const outside = find('.pt-extent');
+    const endNotice = until > duration ? 'Sample recording ends at ' + stamp(duration) + '.' : '';
+    if (outside.textContent !== endNotice) outside.textContent = endNotice;
+    const windowMark=find('.pt-window');
+    windowMark.style.left=(start/horizon*100)+'%';windowMark.style.width=((until-start)/horizon*100)+'%';
+    find('.pt-message').hidden=true;
+    if(changed || !grid.childElementCount) { scroll.scrollTop=0;drawGrid(); }
+  }
+  for (const key of ['from','until']) {
+    const grip=find('[data-grip='+key+']'), input=find('[data-'+key+']');
+    grip.addEventListener('input',()=>{
+      const t=Number(grip.value);
+      if(key==='from')setBounds(Math.min(t,until-1),until);
+      else setBounds(start,Math.max(t,start+1));
+    });
+    function commitInput() {
+      const raw=input.value.trim();
+      const m = /^(?:\+?(\d+)d\s+)?([01]?\d|2[0-3]):([0-5]\d):([0-5]\d)$/.exec(raw);
+      const t = m ? Number(m[1] || 0)*86400 + Number(m[2])*3600 + Number(m[3])*60 + Number(m[4]) - origin :
+        (/^\d+$/.test(raw) ? Number(raw) : NaN);
+      if (!Number.isSafeInteger(t) || t < (key==='from'?0:1) || t > (key==='from'?maxOffset-1:maxOffset)) {
+        const msg=find('.pt-message');msg.hidden=false;msg.textContent='Enter a clock time from 10:14:00 onward, or seconds from the start.';
+        input.setAttribute('aria-invalid','true');return;
+      }
+      input.removeAttribute('aria-invalid');
+      if(key==='from')setBounds(t,Math.max(until,t+1));else setBounds(Math.min(start,t-1),t);
+    }
+    input.addEventListener('change',commitInput);
+    input.addEventListener('keydown',e=>{if(e.key==='Enter') {e.preventDefault();commitInput();}});
+  }
+  let drag = null;
+  const secondAt = x => {const b = ruler.getBoundingClientRect();return Math.max(0,Math.min(horizon,Math.round((x-b.left)/b.width*horizon)));};
+  function dragTo(t) {
+    const a=Math.min(drag.at,t,horizon-1), b=Math.max(drag.at,t,a+1);
+    setBounds(a,b);
+  }
+  ruler.addEventListener('pointerdown',e=>{
+    if(e.button!==0)return;
+    heldHorizon=horizon;
+    if(e.target.matches('input'))return;
+    e.preventDefault();drag={at:secondAt(e.clientX),id:e.pointerId};ruler.setPointerCapture(e.pointerId);
+  });
+  ruler.addEventListener('pointermove',e=>{if(drag?.id===e.pointerId)dragTo(secondAt(e.clientX));});
+  ruler.addEventListener('pointerup',e=>{if(drag?.id===e.pointerId){dragTo(secondAt(e.clientX));drag=null;}});
+  function releaseOverview() {
+    drag=null;heldHorizon=0;setBounds(start,until);
+  }
+  ruler.addEventListener('lostpointercapture',releaseOverview);
+  document.addEventListener('pointerup',()=>{if(heldHorizon)releaseOverview();});
+  document.addEventListener('pointercancel',()=>{if(heldHorizon)releaseOverview();});
+  for (const preset of root.querySelectorAll('[data-seconds]')) {
+    preset.addEventListener('click', () => {
+      const span = Number(preset.dataset.seconds);
+      const left = Math.min(start, Math.max(0, duration - span));
+      setBounds(left, left + span);
+    });
+  }
+  function zoom(factor, anchor = start === 0 ? 0 : .5) {
+    const span = until - start;
+    const next = Math.max(1, Math.min(maxOffset, Math.round(span * factor)));
+    const left = Math.max(0, Math.min(maxOffset - next, Math.round(start + anchor * (span - next))));
+    setBounds(left, left + next);
+  }
+  find('[data-zoom=out]').addEventListener('click', () => zoom(2));
+  find('[data-zoom=in]').addEventListener('click', () => zoom(.5));
+  let wheelRemainder = 0, lastWheelAt = 0;
+  scroll.addEventListener('wheel', event => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    const track = grid.querySelector('.pt-track')?.getBoundingClientRect();
+    const anchor = track ? Math.max(0, Math.min(1, (event.clientY - track.top - 10) / (track.height - 40))) : .5;
+    const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1);
+    if (event.timeStamp - lastWheelAt > 250 || Math.sign(delta) !== Math.sign(wheelRemainder)) wheelRemainder = 0;
+    lastWheelAt = event.timeStamp;
+    wheelRemainder += delta;
+    const previousSpan = until - start;
+    zoom(2 ** Math.max(-3, Math.min(3, wheelRemainder / 160)), anchor);
+    if (until - start !== previousSpan) wheelRemainder = 0;
+  }, {passive:false});
+
+  // A browser has one live selection. Save character offsets per passage so
+  // someone can select words here, then select different words in a second column.
+  function selectedWords() {
+    const selection=window.getSelection();
+    if (!selection?.rangeCount || selection.isCollapsed) return [];
+    const range=selection.getRangeAt(0);
+    const parent = n => (n.nodeType===1 ? n : n.parentElement)?.closest('.pt-lane,.pt-detail-entries');
+    const lane=parent(range.startContainer);
+    if(!lane || !root.contains(lane) || parent(range.endContainer)!==lane) return [];
+    const pieces=[];
+    for(const article of lane.querySelectorAll('[data-entry]')) {
+      const node=article.querySelector('.pt-text').firstChild;
+      if(!range.intersectsNode(node))continue;
+      const lo=range.startContainer===node ? range.startOffset : 0;
+      const hi=range.endContainer===node ? range.endOffset : node.length;
+      if(node.textContent.slice(lo,hi).trim())pieces.push({id:article.dataset.entry,lo,hi});
+    }
+    return pieces;
+  }
+  function keepWords() {
+    const pieces=selectedWords();
+    if(!pieces.length)return;
+    for(const p of pieces)picks.set(p.id,[p.lo,p.hi]);
+    updatePicks();
+  }
+  let selecting=false;
+  root.addEventListener('pointerdown',e=>{selecting=!!e.target.closest('.pt-text,.pt-body')&&!e.target.closest('button');});
+  document.addEventListener('pointerup',()=>{if(selecting){selecting=false;requestAnimationFrame(keepWords);}});
+  document.addEventListener('pointercancel',()=>{selecting=false;});
+  root.addEventListener('keyup',e=>{if(e.shiftKey || e.key==='Shift')keepWords();});
+  find('[data-clear]').addEventListener('click',()=>{
+    const selection=window.getSelection();if(selection?.anchorNode && root.contains(selection.anchorNode))selection.removeAllRanges();
+    picks.clear();laneAnchors={};previewScope='auto';updatePicks();
+  });
+  root.addEventListener('copy',e=>{
+    if(!e.clipboardData || e.target===area || original.contains(e.target))return;
+    const pieces=selectedWords();
+    let text;
+    if(pieces.length) text=pieces.map(p=>entries.find(x=>x.id===p.id).text.slice(p.lo,p.hi)).join('\n');
+    else if(!window.getSelection()?.isCollapsed || !lastSelected().length || e.target.closest('input,textarea'))return;
+    else text=copyRows('picks').join('\n');
+    e.clipboardData.setData('text/plain',text);e.preventDefault();
+  });
+  function openPreview() {
+    preview.hidden=false;
+    find('[data-preview-toggle]').setAttribute('aria-expanded','true');
+    showPreview();
+  }
+  async function copyToClipboard(scope) {
+    const lines=copyRows(scope), text=lines.join('\n');
+    if(!lines.length)return;
+    previewScope=scope;
+    if(!preview.hidden)showPreview();
+    let success=false;
+    try {await navigator.clipboard.writeText(text);success=true;} catch {}
+    if(!success) {
+      openPreview();area.focus();area.select();
+      try {success=document.execCommand('copy');} catch {}
+    }
+    find('.pt-receipt').textContent=success ? 'Copied '+lines.length+(lines.length===1?' entry.':' entries.')
+      : 'The text is selected below. Press ⌘C or use the selection’s Copy action.';
+  }
+  find('[data-copy=all]').addEventListener('click',()=>copyToClipboard('all'));
+  find('[data-copy=picks]').addEventListener('click',()=>copyToClipboard('picks'));
+  find('[data-preview-toggle]').addEventListener('click',()=>{
+    if(preview.hidden){previewScope='auto';openPreview();}
+    else {preview.hidden=true;find('[data-preview-toggle]').setAttribute('aria-expanded','false');}
+  });
+  setBounds(start,until);
+  if (remember && window.openai) {
+    let saved, timer;
+    const snapshot = () => ({from:start, until, excerpts:[...picks]});
+    function restore(state) {
+      const view = state?.privateContent?.parallelTranscript;
+      if (!view || !Number.isSafeInteger(view.from) || !Number.isSafeInteger(view.until) ||
+          view.from < 0 || view.until > maxOffset || view.from >= view.until) return;
+      picks.clear();
+      for (const item of Array.isArray(view.excerpts) ? view.excerpts : []) {
+        if (!Array.isArray(item) || !Array.isArray(item[1])) continue;
+        const entry = byId.get(item[0]), [lo,hi] = item[1];
+        if (entry && Number.isInteger(lo) && Number.isInteger(hi) && lo >= 0 && hi <= entry.text.length && lo < hi) {
+          picks.set(entry.id,[lo,hi]);
+        }
+      }
+      setBounds(view.from,view.until);
+      updatePicks();
+      saved = JSON.stringify(snapshot());
+    }
+    restore(window.openai.widgetState);
+    saved = JSON.stringify(snapshot());
+    window.addEventListener('openai:set_globals', event => restore(event.detail?.globals?.widgetState));
+    function rememberInteraction() {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const state = snapshot(), key = JSON.stringify(state);
+        if (key === saved) return;
+        saved = key;
+        window.openai?.setWidgetState?.({modelContent:{timeWindow:[stamp(start),stamp(until)]},
+          privateContent:{parallelTranscript:state}})?.catch(() => {});
+      },180);
+    }
+    for (const event of ['click','change','pointerup','keyup','wheel']) root.addEventListener(event,rememberInteraction);
+  }
+}
+</script>
+    </section>
+    <section data-variant="Margin notes" hidden></section>
     <section data-variant="Track mixer" hidden></section>
     <section data-variant="Moment cards" hidden></section>
     <section data-variant="Split desk" hidden></section>
@@ -305,8 +1221,21 @@ try {
     const picks=state?.modelContent?.daybookViews;
     if(Array.isArray(picks)){shortlist.clear();for(const name of picks) if(sections.some(s=>s.dataset.variant===name))shortlist.add(name);updatePicks();}
   }
+  root.addEventListener('click', e => {
+    const pick = e.target.closest('[data-pick]');
+    if (!pick) return;
+    const name = pick.closest('[data-variant]').dataset.variant;
+    if (shortlist.has(name)) shortlist.delete(name); else shortlist.add(name);
+    savePicks();
+  });
   for (const section of sections) {
     const name=section.dataset.variant;
+    if (name === 'Parallel transcript') {
+      const view = section.querySelector('#daybook-columns');
+      view.querySelector('[data-pick]').hidden = false;
+      mountParallelTranscript(view, events, pictures);
+      continue;
+    }
     const s={time:name==='Time lens'?22:51,selected:name==='Track mixer'||name==='Split desk'?'cover':null,beat:0,open:new Set([0,1]),stack:new Set(),interval:null};
     section.setAttribute('aria-label',name+' transcript');
     section.innerHTML='<div class="db-window"><header class="db-bar"><span class="brand">Daybook</span><small>Sample recording · 10:14–10:15</small></header>'+
@@ -343,7 +1272,6 @@ try {
       const b=e.target.closest('button');if(!b)return;
       if(b.hasAttribute('data-original'))showOriginal(get(b.dataset.original),b);
       else if(b.hasAttribute('data-close'))closeOriginal();
-      else if(b.hasAttribute('data-pick')){shortlist.has(name)?shortlist.delete(name):shortlist.add(name);savePicks();}
       else if(b.hasAttribute('data-play')) {
         if(s.interval!==null){stop();return;}if(s.time===60)move(0);
         play.textContent='Pause sample';s.interval=setInterval(()=>move(s.time+1),1000);
@@ -371,16 +1299,25 @@ try {
   const variants=[...document.querySelectorAll('.viz-carousel > [data-variant]')];
   const picker=document.getElementById('study');
   for (const [i,variant] of variants.entries()) picker.add(new Option(variant.dataset.variant,String(i)));
-  function show(i) {
+  const slug = v => v.dataset.variant.toLowerCase().replaceAll(' ', '-');
+  function linkedView() {
+    const index = variants.findIndex(v => slug(v) === location.hash.slice(1));
+    return index < 0 ? 0 : index;
+  }
+  function show(i, remember = true) {
     const index=(i+variants.length)%variants.length;
     variants.forEach((v,j)=>v.hidden=j!==index);
     picker.value=String(index);
     document.getElementById('count').textContent=(index+1)+' / '+variants.length;
+    if (remember) {
+      try { history.replaceState(null, '', '#' + slug(variants[index])); } catch {}
+    }
   }
   picker.addEventListener('change',()=>show(Number(picker.value)));
   document.getElementById('prev').addEventListener('click',()=>show(Number(picker.value)-1));
   document.getElementById('next').addEventListener('click',()=>show(Number(picker.value)+1));
-  show(0);
+  window.addEventListener('hashchange',()=>show(linkedView(), false));
+  show(linkedView(), false);
 })();
 </script>
 </main></body>

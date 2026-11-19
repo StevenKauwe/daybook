@@ -137,10 +137,12 @@ impl Config {
         {
             return Err("inference memory must be 64..1024 MiB; cooldown 100..10000 ms".into());
         }
-        if !(30..=86400).contains(&self.screen_seconds)
+        if !(5..=86400).contains(&self.screen_seconds)
             || !(60..=86400).contains(&self.compression_seconds)
         {
-            return Err("screen interval must be 30..86400 seconds; compression 60..86400".into());
+            return Err(
+                "Screen interval must be 5–86400 seconds and compression 60–86400 seconds.".into(),
+            );
         }
         if !(30..=86400).contains(&self.rolling_audio_seconds)
             || self.retain_audio_hours > 720
@@ -161,17 +163,17 @@ impl Config {
         {
             return Err("invalid provider budget".into());
         }
-        if !["ocr", "vision", "both", "off"].contains(&self.screen_mode.as_str()) {
-            return Err("screen_mode must be ocr, vision, both, or off".into());
+        if !["ocr", "off"].contains(&self.screen_mode.as_str()) {
+            return Err("Passive screen text can use local OCR or be off.".into());
         }
         self.summary.validate()?;
         self.vision.validate()?;
-        if ["vision", "both"].contains(&self.screen_mode.as_str())
-            && (!self.vision.supports_images || self.vision.model.is_empty())
-        {
-            return Err("vision needs an explicitly image-capable model".into());
-        }
         Ok(())
+    }
+    pub fn migrate_screen_mode(&mut self) {
+        if matches!(self.screen_mode.as_str(), "vision" | "both") {
+            self.screen_mode = "ocr".into();
+        }
     }
     pub fn load(path: &Path) -> Result<Self, String> {
         if !path.exists() {
@@ -201,6 +203,7 @@ impl Config {
             serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
         let mut c: Self = serde_json::from_value(raw.clone()).map_err(|e| e.to_string())?;
+        c.migrate_screen_mode();
         if raw.get("audio_storage").is_none() && c.retain_audio_hours > 0 {
             c.audio_storage = "recovery".into();
         }
@@ -275,7 +278,10 @@ mod tests {
     fn validation() {
         let mut c = Config::default();
         assert!(c.validate().is_ok());
-        c.screen_seconds = 0;
+        assert_eq!(c.screen_seconds, 300);
+        c.screen_seconds = 5;
+        assert!(c.validate().is_ok());
+        c.screen_seconds = 4;
         assert!(c.validate().is_err());
         let mut p = Provider::default();
         p.endpoint = "https://example.com/v1".into();
@@ -284,6 +290,28 @@ mod tests {
         assert!(p.validate().is_ok());
         p.endpoint = "https://secret@example.com".into();
         assert!(p.validate().is_err())
+    }
+    #[test]
+    fn older_image_modes_load_as_local_ocr_and_preserve_the_chosen_interval() {
+        let path =
+            std::env::temp_dir().join(format!("daybook-screen-config-{}.json", std::process::id()));
+        for (old, expected) in [
+            ("vision", "ocr"),
+            ("both", "ocr"),
+            ("off", "off"),
+            ("ocr", "ocr"),
+        ] {
+            std::fs::write(
+                &path,
+                serde_json::json!({"screen_mode":old,"screen_seconds":42,"retain_images":true})
+                    .to_string(),
+            )
+            .unwrap();
+            let config = Config::load(&path).unwrap();
+            assert_eq!(config.screen_mode, expected);
+            assert_eq!(config.screen_seconds, 42);
+        }
+        std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn import_no_secrets() {

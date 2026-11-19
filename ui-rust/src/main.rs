@@ -232,7 +232,6 @@ struct Controls {
     export: String,
     show_export: bool,
     import: String,
-    import_vision: bool,
     quitting: bool,
     stream_page: Value,
     reader: live::Reader,
@@ -411,7 +410,6 @@ impl Controls {
             export: String::new(),
             show_export: false,
             import: String::new(),
-            import_vision: false,
             quitting: false,
             stream_page: Value::Null,
             reader: Default::default(),
@@ -697,6 +695,9 @@ impl Controls {
                                 && b["after_id"].is_null()
                                 && b["day"] == chrono::Local::now().date_naive().to_string()
                         });
+                        if self.reading.passive_screen != (v["passive_screen"] == true) {
+                            continue;
+                        }
                         if (self.stream_request.is_null() && latest)
                             || (!self.stream_request.is_null()
                                 && r.body.as_ref() == Some(&self.stream_request))
@@ -706,7 +707,11 @@ impl Controls {
                     }
                     "/live" => {
                         self.pasted(&v["paste_image"]);
-                        if self.stream_request.is_null() && v["transcript"].is_object() {
+                        if self.stream_request.is_null()
+                            && v["transcript"].is_object()
+                            && self.reading.passive_screen
+                                == (v["transcript"]["passive_screen"] == true)
+                        {
                             self.set_stream_page(v["transcript"].take());
                         }
                         self.last_seen = Some(Instant::now());
@@ -905,11 +910,7 @@ impl Controls {
                     }
                     "/import" => {
                         if let Ok(p) = serde_json::from_value(v) {
-                            if self.import_vision {
-                                self.config.vision = p;
-                            } else {
-                                self.config.summary = p;
-                            }
+                            self.config.summary = p;
                             self.message =
                                 "Provider metadata imported into your draft. Review and save."
                                     .into();
@@ -1536,26 +1537,31 @@ impl Controls {
             }
             1 => {
                 card(ui, |ui| {
-                    ui.heading("Screen understanding");
-                    egui::ComboBox::from_label("Method")
-                        .selected_text(&self.config.screen_mode)
+                    ui.heading("Passive screen text");
+                    egui::ComboBox::from_label("Screen checks")
+                        .selected_text(if self.config.screen_mode == "off" {
+                            "Off"
+                        } else {
+                            "Read on this Mac"
+                        })
                         .show_ui(ui, |ui| {
-                            for (k, label) in [
-                                ("off", "Off"),
-                                ("ocr", "Local OCR"),
-                                ("vision", "Vision model"),
-                                ("both", "OCR + vision model"),
-                            ] {
+                            for (k, label) in [("off", "Off"), ("ocr", "Read on this Mac")] {
                                 ui.selectable_value(&mut self.config.screen_mode, k.into(), label);
                             }
                         });
-                    minutes(ui, "Sample every", &mut self.config.screen_seconds, 0.5);
+                    ui.horizontal(|ui| {
+                        ui.label("Check every");
+                        ui.add(
+                            egui::DragValue::new(&mut self.config.screen_seconds)
+                                .range(5..=86400)
+                                .suffix(" seconds"),
+                        );
+                    });
                     muted(
                         ui,
-                        "Unchanged screens skip OCR/model work. Images stay local unless this tool’s hosted transmission is explicitly enabled.",
+                        "While recording, Daybook reads text on this Mac and discards each frame. Repeated lines keep their first and last observed times. Save Screenshot keeps an original.",
                     );
                 });
-                provider(ui, "Screen vision provider", &mut self.config.vision, true);
                 card(ui, |ui| {
                     ui.heading("Incremental summaries");
                     minutes(
@@ -1571,7 +1577,7 @@ impl Controls {
                 });
                 provider(ui, "Summary provider", &mut self.config.summary, false);
                 card(ui, |ui| {
-                    ui.collapsing("Import OpenCode provider metadata",|ui|{muted(ui,"JSON/JSONC metadata only. No credentials, OAuth, file/environment expansion or effective-project merging is imported.");ui.checkbox(&mut self.import_vision,"Import into screen vision (otherwise summary)");ui.add(egui::TextEdit::multiline(&mut self.import).desired_rows(5).desired_width(f32::INFINITY));if ui.button("Import into draft").clicked(){self.send("/import",Some(json!({"jsonc":self.import})));}});
+                    ui.collapsing("Import a summary provider from OpenCode",|ui|{muted(ui,"JSON/JSONC metadata only. No credentials, OAuth, file/environment expansion or effective-project merging is imported.");ui.add(egui::TextEdit::multiline(&mut self.import).desired_rows(5).desired_width(f32::INFINITY));if ui.button("Import into draft").clicked(){self.send("/import",Some(json!({"jsonc":self.import})));}});
                 });
             }
             2 => {
@@ -1630,12 +1636,8 @@ impl Controls {
                         ui,
                         "Memory mode writes no audio files. In recovery mode, 0 hours uses only the rolling window. Expired unfinished audio is reported; text and summaries remain.",
                     );
-                    ui.checkbox(
-                        &mut self.config.retain_images,
-                        "Keep selected screen images",
-                    );
                     ui.horizontal(|ui| {
-                        ui.label("Image retention");
+                        ui.label("Earlier retained periodic images");
                         ui.add(
                             egui::DragValue::new(&mut self.config.image_hours)
                                 .range(0..=720)
@@ -1894,8 +1896,16 @@ impl Controls {
         let saved_image = v["details"]["saved_image"] == true;
         if let Some(id) = v["image_id"].as_i64() {
             self.picture.show(ui, &self.base, id);
-        } else if v["kind"] == "screen" {
+        } else if v["kind"] == "screen"
+            && !matches!(
+                v["source"].as_str(),
+                Some("passive_screen" | "screen" | "vision")
+            )
+        {
             muted(ui, "The original image is unavailable.");
+        }
+        if v["source"] == "passive_screen" && v["end"].as_i64() > v["at"].as_i64() {
+            muted(ui, format!("Last seen {}", full_timestamp(&v["end"])));
         }
         if let Some(ids) = v["details"]["image_ids"].as_array() {
             for id in ids.iter().filter_map(Value::as_i64) {
@@ -1911,7 +1921,7 @@ impl Controls {
                 }
                 ui.label(text);
             };
-            if v["kind"] == "screen" {
+            if v["kind"] == "screen" && (v["image_id"].is_i64() || saved_image) {
                 ui.push_id(("screen-text", &v["id"].as_i64()), |ui| {
                     ui.collapsing(
                         if v["source"] == "vision" {

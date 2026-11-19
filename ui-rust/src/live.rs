@@ -7,15 +7,33 @@ struct Paragraph {
     parts: Vec<Value>,
     chars: usize,
 }
+fn passage_text(row: &Value) -> &str {
+    let text = row["text"].as_str().unwrap_or("").trim();
+    if text.is_empty() && row["image_id"].is_i64() {
+        if row["source"] == "clipboard" {
+            "Pasted image"
+        } else {
+            "Saved screenshot"
+        }
+    } else {
+        text
+    }
+}
 impl Paragraph {
+    fn separator(&self) -> &'static str {
+        if self.source == "passive_screen" {
+            "\n"
+        } else {
+            " "
+        }
+    }
     fn text(&self) -> String {
         self.parts
             .iter()
-            .filter_map(|r| r["text"].as_str())
-            .map(str::trim)
+            .map(passage_text)
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
-            .join(" ")
+            .join(self.separator())
     }
     fn provisional(&self) -> bool {
         self.parts.iter().any(|r| r["kind"] == "preview")
@@ -24,14 +42,12 @@ impl Paragraph {
 fn paragraphs(rows: &[Value]) -> Vec<Paragraph> {
     let mut result: Vec<Paragraph> = Vec::new();
     for row in rows {
-        if row["text"]
-            .as_str()
-            .is_none_or(|text| text.trim().is_empty())
-        {
+        let text = passage_text(row);
+        if text.is_empty() {
             continue;
         }
         let source = row["source"].as_str().unwrap_or("remote");
-        let count = row["text"].as_str().unwrap_or("").chars().count();
+        let count = text.chars().count();
         let join = result.last().is_some_and(|p| {
             let last = p.parts.last().unwrap();
             let gap = row["at"].as_i64().unwrap_or(0) - last["end"].as_i64().unwrap_or(0);
@@ -40,8 +56,13 @@ fn paragraphs(rows: &[Value]) -> Vec<Paragraph> {
                 .unwrap_or("")
                 .trim_end()
                 .ends_with(['.', '!', '?']);
+            let related = match source {
+                "passive_screen" => last["at"] == row["at"] && last["end"] == row["end"],
+                "me" | "remote" => (-2..=12).contains(&gap),
+                _ => false,
+            };
             p.source == source
-                && (-2..=12).contains(&gap)
+                && related
                 && p.chars + count <= 4000
                 && !(p.chars >= 700 && boundary)
                 && last["truncated"] != true
@@ -165,9 +186,9 @@ impl Reader {
                                 ..Default::default()
                             };
                             if i > 0 {
-                                job.append(" ", 0., format.clone());
+                                job.append(p.separator(), 0., format.clone());
                             }
-                            job.append(row["text"].as_str().unwrap_or("").trim(), 0., format);
+                            job.append(passage_text(row), 0., format);
                         }
                         let height = fonts.layout_job(job.clone()).size().y;
                         PassageLayout { job, height }
@@ -181,7 +202,13 @@ impl Reader {
 }
 
 fn source_label(track: &str) -> &'static str {
-    if track == "me" { "You" } else { "System audio" }
+    match track {
+        "me" => "You",
+        "passive_screen" | "screen" | "vision" => "Passive screen text",
+        "screenshot" => "Screenshot",
+        "clipboard" => "Clipboard",
+        _ => "System audio",
+    }
 }
 
 fn source_button(ui: &mut egui::Ui, glyph: Icon, label: &str) -> egui::Response {
@@ -263,10 +290,15 @@ impl Controls {
     }
     pub(super) fn stream_request(&mut self, cursor: Value) {
         self.follow_live = false;
-        let mut body = json!({"day":self.stream_page["day"].as_str().map(str::to_owned).unwrap_or_else(||chrono::Local::now().date_naive().to_string())});
+        let mut body = json!({"day":self.stream_page["day"].as_str().map(str::to_owned).unwrap_or_else(||chrono::Local::now().date_naive().to_string()),"with_saves":true});
+        if self.reading.passive_screen {
+            body["passive_screen"] = json!(true);
+        }
         if let Some(c) = cursor.as_object() {
-            for (k, v) in c {
-                body[k] = v.clone();
+            for k in ["before_at", "before_id", "after_at", "after_id"] {
+                if let Some(v) = c.get(k) {
+                    body[k] = v.clone();
+                }
             }
         }
         self.stream_request = body.clone();
@@ -279,7 +311,7 @@ impl Controls {
         self.stream_request = Value::Null;
         self.send(
             "/transcript",
-            Some(json!({"day":chrono::Local::now().date_naive().to_string()})),
+            Some(json!({"day":chrono::Local::now().date_naive().to_string(),"passive_screen":self.reading.passive_screen,"with_saves":true})),
         );
     }
     pub(super) fn stream(&mut self, ui: &mut egui::Ui) {
@@ -367,8 +399,25 @@ impl Controls {
                 }
             });
         });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Read alongside your microphone");
+            ui.selectable_value(&mut self.reading.passive_screen, false, "System audio");
+            ui.selectable_value(
+                &mut self.reading.passive_screen,
+                true,
+                "Passive screen text",
+            );
+        });
         if self.reading != old_style && self.preview_output.is_none() {
             self.send("/reading", Some(json!(self.reading)));
+            if self.reading.passive_screen != old_style.passive_screen {
+                if self.stream_request.is_null() {
+                    self.follow_stream();
+                } else {
+                    self.stream_request(self.stream_request.clone());
+                }
+                self.set_stream_page(json!({"day":self.stream_page["day"]}));
+            }
         }
         let loaded = &self.status["health"]["loaded_speech_model"];
         if let Some(reason) = self.status["health"]["speech_blocker"]
@@ -405,6 +454,7 @@ impl Controls {
                             design::icon_slot(ui,Icon::Book,colors.mine,32.);
                             ui.add_space(4.);
                             let (heading,body)=if !fresh {("Waiting for the recorder","Your saved conversation will appear when Daybook reconnects.")}
+                                else if self.reading.passive_screen {("Microphone and screen text","Spoken words and newly observed screen text appear here during recording.")}
                                 else if active {("Listening for speech","Words appear here as the microphone or system audio picks up speech.")}
                                 else {("Your transcript starts here","Start recording when you’re ready. Your microphone and system audio will appear as separate voices.")};
                             ui.label(RichText::new(heading).font(design::serif(30.)).color(colors.ink));
@@ -423,7 +473,7 @@ impl Controls {
                                 let mine=p.source=="me"; let accent=if mine {colors.mine} else {colors.remote};
                                 row.horizontal(|ui|{
                                     ui.spacing_mut().item_spacing.x=7.;
-                                    let glyph=if mine {Icon::Mic} else {Icon::System};
+                                    let glyph=match p.source.as_str() { "me"=>Icon::Mic,"remote"=>Icon::System,"clipboard"=>Icon::Note,_=>Icon::Book };
                                     let (slot,_)=ui.allocate_exact_size(egui::Vec2::splat(23.),egui::Sense::hover());
                                     ui.painter().circle_filled(slot.center(),11.5,if self.reading.night{design::CONSOLE}else if mine{Color32::from_rgb(221,238,224)}else{Color32::from_rgb(236,229,246)});
                                     design::icon(ui.painter(),slot.center(),14.,glyph,accent);
@@ -431,7 +481,8 @@ impl Controls {
                                     if p.provisional(){design::eyebrow(ui,"Writing…",accent);}
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
                                         if p.parts.len()==1 {
-                                            if ui.small_button("Passage details").clicked() { self.inspect("observation",p.parts[0]["id"].as_i64().unwrap_or(0),None); }
+                                            let action=if p.parts[0]["image_id"].is_i64() {"Open original"} else {"Passage details"};
+                                            if ui.small_button(action).clicked() { self.inspect("observation",p.parts[0]["id"].as_i64().unwrap_or(0),None); }
                                         } else { ui.menu_button(RichText::new("Passages").size(11.).color(colors.muted),|ui|{
                                             for part in &p.parts{
                                                 let excerpt = part["text"].as_str().unwrap_or("").split_whitespace().take(5).collect::<Vec<_>>().join(" ");
@@ -581,6 +632,21 @@ mod tests {
         );
         assert_eq!(grouped[0].parts[1]["at"], 108);
         assert!(!grouped[0].text().contains("108"));
+    }
+    #[test]
+    fn screen_lines_keep_their_span_and_manual_images_keep_their_own_original() {
+        let entries = [
+            json!({"kind":"screen","source":"passive_screen","text":"Title","at":5,"end":15}),
+            json!({"kind":"screen","source":"passive_screen","text":"Proof 4","at":5,"end":15}),
+            json!({"kind":"screen","source":"passive_screen","text":"Title","at":20,"end":25}),
+            json!({"kind":"screen","source":"screenshot","text":"","at":21,"end":21,"image_id":4}),
+            json!({"kind":"screen","source":"screenshot","text":"Print proof","at":21,"end":21,"image_id":5}),
+        ];
+        let p = paragraphs(&entries);
+        assert_eq!(
+            p.iter().map(Paragraph::text).collect::<Vec<_>>(),
+            ["Title\nProof 4", "Title", "Saved screenshot", "Print proof"]
+        );
     }
     #[test]
     fn input_meters_distinguish_silence_waiting_stale_stopped_and_each_track() {

@@ -6,6 +6,7 @@ pub fn entry_label(kind: &str, source: &str) -> &'static str {
         ("note", _) => "Your note",
         ("screen", "clipboard") => "Copied image",
         ("screen", "screenshot") => "Saved screenshot",
+        ("screen", "passive_screen") => "Passive screen text",
         ("screen", "vision") => "Screen description",
         ("screen", _) => "On screen",
         ("transcript_suppressed", _) => "Suppressed audio",
@@ -24,6 +25,8 @@ pub struct ReadingStyle {
     pub size: u8,
     pub journal: bool,
     pub night: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub passive_screen: bool,
 }
 
 impl Default for ReadingStyle {
@@ -32,6 +35,7 @@ impl Default for ReadingStyle {
             size: 23,
             journal: true,
             night: false,
+            passive_screen: false,
         }
     }
 }
@@ -65,6 +69,7 @@ mod tests {
             size: 27,
             journal: false,
             night: true,
+            passive_screen: true,
         };
         assert_eq!(
             ReadingStyle::saved(&serde_json::to_string(&choice).unwrap()),

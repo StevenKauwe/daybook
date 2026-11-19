@@ -2,11 +2,13 @@ mod archive_image;
 mod config;
 mod inspect;
 mod live_audio;
+mod passive;
 mod provider;
 mod reading;
 mod realtime;
 mod recovery;
 mod saved;
+mod screen_sample;
 mod speech_file;
 mod store;
 mod streaming;
@@ -256,23 +258,10 @@ fn ingest(s: &Store, c: &Config, v: &Value, inbox: &live_audio::Shared) -> Resul
                 }
             }
         }
-        "screen" => {
-            let mut d = v.clone();
-            d["vision_pending"] = json!(["vision", "both"].contains(&c.screen_mode.as_str()));
-            let path = d["path"].as_str().unwrap_or("");
-            if !path.is_empty() && !worker::valid_relative(path, "images") {
-                return Err("unsafe image path".into());
+        "screen" | "screen_unchanged" => {
+            if c.screen_mode != "off" {
+                passive::observe(s, v, c.screen_seconds)?;
             }
-            let at = v["at"].as_f64().unwrap_or(now() as f64) as i64;
-            s.observation(
-                at,
-                at,
-                "screen",
-                "screen",
-                v["text"].as_str().unwrap_or(""),
-                &d,
-                None,
-            )?;
         }
         "audio_gap" => {
             if s.get("audio_gap") != v.to_string() {
@@ -477,7 +466,11 @@ fn run() -> Result<()> {
             if let Err(e) = ingest(&s, &c, &v, &inbox) {
                 s.event(&format!("Capture ingestion error: {e}"))?;
                 if let Some(b) = &mut native {
-                    b.send("pause")
+                    if matches!(v["type"].as_str(), Some("screen_unchanged" | "screen")) {
+                        b.send("refresh_screen");
+                    } else {
+                        b.send("pause");
+                    }
                 }
             }
         }
@@ -591,7 +584,7 @@ fn run() -> Result<()> {
     ""|"/"=>{content_type="text/html; charset=utf-8";Ok(include_str!("ui.html").replace("__PREFIX__",&prefix))},
     "/update"=>Ok(update::status(&root,synthetic).to_string()),
     "/meters"=>Ok(meters.lock().unwrap().snapshot().to_string()),
-    "/live"=>{let mut v=inspect::live(&s)?;v["capture_transition"]=json!(s.get("capture_transition"));v["transcript"]=inspect::transcript(&s,&json!({"day":chrono::Local::now().date_naive().to_string()}))?;v["memory_audio"]=inbox.lock().unwrap().stats();v["paste_image"]=saves.paste_status();Ok(v.to_string())},
+    "/live"=>{let mut v=inspect::live(&s)?;v["capture_transition"]=json!(s.get("capture_transition"));v["transcript"]=inspect::transcript(&s,&json!({"day":chrono::Local::now().date_naive().to_string(),"with_saves":true,"passive_screen":reading::ReadingStyle::saved(&s.get("reading_style")).passive_screen}))?;v["memory_audio"]=inbox.lock().unwrap().stats();v["paste_image"]=saves.paste_status();Ok(v.to_string())},
     "/status"=>Ok(json!({"status":s.get("status"),"capture_warning":s.get("capture_warning"),"active":s.get("active"),"armed":s.get("armed"),"notice":s.get("notice"),"permissions":s.get("permissions"),"pending":s.pending(),"summary_chars":s.summary_chars(),"disk_bytes":store::disk_bytes(&root),"config":c,"observations":s.recent()?,"jobs":s.summaries()?,"synthetic":synthetic}).to_string()),
     "/overview"=>Ok(json!({"reading":reading::ReadingStyle::saved(&s.get("reading_style")),"capture_starting":s.get("capture_starting"),"capture_stopping":s.get("capture_stopping"),"capture_transition":s.get("capture_transition"),"update":update::status(&root,synthetic),"status":s.get("status"),"capture_warning":s.get("capture_warning"),"active":s.get("active"),"armed":s.get("armed"),"notice":s.get("notice"),"permissions":s.get("permissions"),"pending":s.pending(),"summary_chars":s.summary_chars(),"disk_bytes":store::disk_bytes(&root),"config":c,"synthetic":synthetic,"draft":s.get("note_draft"),"draft_images":s.draft_images()?,"memory_audio":inbox.lock().unwrap().stats(),"health":inspect::health(&s,&c,&mut sampler)?}).to_string()),
     "/export"=>{s.export()?;content_type="text/plain; charset=utf-8";Ok(std::fs::read_to_string(root.join(format!("{}.txt",chrono::Local::now().date_naive())))?)},
@@ -796,7 +789,8 @@ fn run() -> Result<()> {
                     if s.get("active") == "true" || s.get("armed") == "true" {
                         return Err("Stop recording before changing settings".into());
                     }
-                    let next: Config = serde_json::from_value(v)?;
+                    let mut next: Config = serde_json::from_value(v)?;
+                    next.migrate_screen_mode();
                     next.validate()?;
                     write_config(&root, &next)?;
                     c = next;

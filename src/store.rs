@@ -8,6 +8,7 @@ pub fn now() -> i64 {
 pub struct Store {
     pub db: Connection,
     pub root: PathBuf,
+    pub passive: std::cell::RefCell<crate::passive::Tracker>,
 }
 impl Store {
     pub fn open(root: &Path) -> Result<Self> {
@@ -70,6 +71,7 @@ impl Store {
  INSERT OR IGNORE INTO state VALUES('exports_source_dates_v3','1'); COMMIT;"))?;
         }
         Ok(Self {
+            passive: Default::default(),
             db,
             root: root.into(),
         })

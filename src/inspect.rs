@@ -175,19 +175,40 @@ pub fn transcript(s: &Store, v: &Value) -> Result<Value> {
         .unwrap_or(if newer { i64::MIN } else { i64::MAX });
     let cmp = if newer { ">" } else { "<" };
     let order = if newer { "ASC" } else { "DESC" };
-    let mut q = s.db.prepare(&format!("SELECT id,at,end_at,kind,source,substr(text,1,4000),length(text)>4000 FROM journal_entries WHERE at>=?1 AND at<?2 AND kind IN ('preview','transcript') AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)) ORDER BY at {order},id {order} LIMIT 80"))?;
-    let mut rows=q.query_map(params![start,end,at,id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"truncated":r.get::<_,bool>(6)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
+    let passive = v["passive_screen"] == true;
+    let scope = if passive {
+        "((at>=?1 AND at<?2 AND ((kind IN ('preview','transcript') AND source='me') OR (kind='screen' AND source IN ('passive_screen','screen','vision') AND trim(text)<>''))) OR (kind='screen' AND source='passive_screen' AND at<?1 AND end_at>at AND end_at>=?1))"
+    } else {
+        "at>=?1 AND at<?2 AND kind IN ('preview','transcript')"
+    };
+    let scope = if v["with_saves"] == true {
+        format!(
+            "(({scope}) OR (at>=?1 AND at<?2 AND ((kind='screen' AND source IN ('screenshot','clipboard')) OR (kind='note' AND source='clipboard'))))"
+        )
+    } else {
+        scope.to_owned()
+    };
+    let mut q = s.db.prepare(&format!("SELECT id,at,end_at,kind,source,substr(text,1,4000),length(text)>4000,CASE WHEN kind='screen' AND source IN ('screenshot','clipboard') THEN (SELECT observation_id FROM saved_images WHERE observation_id=journal_entries.id) END FROM journal_entries WHERE {scope} AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)) ORDER BY at {order},id {order} LIMIT 80"))?;
+    let mut rows=q.query_map(params![start,end,at,id],|r|{
+        let mut row=json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"truncated":r.get::<_,bool>(6)?});
+        if let Some(id)=r.get::<_,Option<i64>>(7)? { row["image_id"]=json!(id); }
+        Ok(row)
+    })?.collect::<std::result::Result<Vec<_>,_>>()?;
     if !newer {
         rows.reverse();
     }
-    let total:i64=s.db.query_row("SELECT count(*) FROM journal_entries WHERE at>=?1 AND at<?2 AND kind IN ('preview','transcript')",params![start,end],|r|r.get(0))?;
+    let total: i64 = s.db.query_row(
+        &format!("SELECT count(*) FROM journal_entries WHERE {scope}"),
+        params![start, end],
+        |r| r.get(0),
+    )?;
     let mut older = Value::Null;
     let mut later = Value::Null;
     if let (Some(first), Some(last)) = (rows.first(), rows.last()) {
         for (row, cmp, cursor) in [(first, "<", &mut older), (last, ">", &mut later)] {
             let a = row["at"].as_i64().unwrap();
             let i = row["id"].as_i64().unwrap();
-            let more:bool=s.db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM journal_entries WHERE at>=?1 AND at<?2 AND kind IN ('preview','transcript') AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)))"),params![start,end,a,i],|r|r.get(0))?;
+            let more:bool=s.db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM journal_entries WHERE {scope} AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)))"),params![start,end,a,i],|r|r.get(0))?;
             if more {
                 *cursor = if cmp == "<" {
                     json!({"before_at":a,"before_id":i})
@@ -197,7 +218,9 @@ pub fn transcript(s: &Store, v: &Value) -> Result<Value> {
             }
         }
     }
-    Ok(json!({"day":day,"items":rows,"older":older,"newer":later,"total":total,"limit":80}))
+    Ok(
+        json!({"day":day,"items":rows,"older":older,"newer":later,"total":total,"limit":80,"passive_screen":passive}),
+    )
 }
 struct ArchiveQuery<'a> {
     day: &'a str,
@@ -235,6 +258,7 @@ impl<'a> ArchiveQuery<'a> {
                 "remote",
                 "screen",
                 "vision",
+                "passive_screen",
                 "system",
                 "clipboard",
                 "screenshot",
@@ -270,10 +294,10 @@ impl<'a> ArchiveQuery<'a> {
 // keeps the existing source-date convention and its indexed range scan.
 const DAY_ENTRIES: &str = "journal_entries WHERE at>=?1 AND at<?2";
 const RANGE_ENTRIES: &str = "(SELECT * FROM journal_entries WHERE at>=?1 AND at<?2
-    UNION ALL SELECT * FROM journal_entries WHERE at<?1 AND end_at>?1 AND end_at>at) WHERE 1";
+    UNION ALL SELECT * FROM journal_entries WHERE at<?1 AND end_at>=?1 AND end_at>at AND (end_at>?1 OR source='passive_screen')) WHERE 1";
 const MATCH_ENTRY: &str =
     "((?3='all' AND kind IN ('transcript','preview','note','screen')) OR kind=?3)
-    AND (?4='all' OR source=?4) AND (?5='' OR instr(lower(text),lower(?5))>0)";
+    AND (?4='all' OR source=?4 OR (?4='screen' AND source='passive_screen')) AND (?5='' OR instr(lower(text),lower(?5))>0)";
 
 #[derive(Default, serde::Serialize)]
 struct ArchiveSession {
@@ -297,7 +321,7 @@ fn archive_sessions(s: &Store, f: &ArchiveQuery<'_>) -> Result<Vec<ArchiveSessio
     let (from, until) = f.selected.unwrap_or(f.bounds);
     let mut q = s.db.prepare(&format!(
         "SELECT at,end_at,kind,source,substr(text,1,144),
-            (({MATCH_ENTRY}) AND at<?7 AND (at>=?6 OR end_at>?6))
+            (({MATCH_ENTRY}) AND at<?7 AND (at>=?6 OR end_at>?6 OR (end_at=?6 AND source='passive_screen')))
          FROM {RANGE_ENTRIES} AND (kind IN ('transcript','preview','note','screen') OR kind=?3)
          ORDER BY at,id"
     ))?;
@@ -377,7 +401,7 @@ pub fn copy_time_range(s: &Store, v: &Value) -> Result<Value> {
     let mut text = format!("Daybook · {} · {} – {}\n", f.day, stamp(start), stamp(end));
     let mut count = 0usize;
     let mut q = s.db.prepare(&format!(
-        "SELECT at,kind,source,text,json_array_length(details,'$.image_ids') FROM {RANGE_ENTRIES} AND {MATCH_ENTRY} ORDER BY at,id"
+        "SELECT at,kind,source,text,json_array_length(details,'$.image_ids'),end_at FROM {RANGE_ENTRIES} AND {MATCH_ENTRY} ORDER BY at,id"
     ))?;
     let mut rows = q.query(params![start, end, f.kind, f.source, f.query])?;
     while let Some(r) = rows.next()? {
@@ -397,7 +421,11 @@ pub fn copy_time_range(s: &Store, v: &Value) -> Result<Value> {
         writeln!(
             text,
             "\n{}  {}",
-            stamp(r.get(0)?),
+            if source == "passive_screen" && r.get::<_, i64>(5)? > r.get::<_, i64>(0)? {
+                format!("{} – {}", stamp(r.get(0)?), stamp(r.get(5)?))
+            } else {
+                stamp(r.get(0)?)
+            },
             crate::reading::entry_label(kind, source)
         )?;
         if !body.is_empty() {
@@ -423,7 +451,7 @@ pub fn copy_time_range(s: &Store, v: &Value) -> Result<Value> {
 }
 
 fn add_image_ref(s: &Store, row: &mut Value) -> Result<()> {
-    if row["kind"] == "screen" {
+    if row["kind"] == "screen" && row["source"] != "passive_screen" {
         let id = row["id"].as_i64().ok_or("Missing image entry ID")?;
         row["image_id"] = json!(crate::archive_image::retained_id(&s.db, &s.root, id)?);
     }
@@ -620,6 +648,93 @@ pub fn source(s: &Store, id: i64) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reader_source_switch_keeps_saves_and_copies_confirmed_screen_ranges() {
+        let root = tempfile::tempdir().unwrap();
+        let s = Store::open(root.path()).unwrap();
+        let day = "2026-03-05";
+        let (midnight, _) = day_bounds(day).unwrap();
+        let add = |a, b, kind, source, text| {
+            s.observation(
+                midnight + a,
+                midnight + b,
+                kind,
+                source,
+                text,
+                &json!({}),
+                None,
+            )
+            .unwrap()
+        };
+        add(-5, 0, "screen", "passive_screen", "Previous evening");
+        add(1, 7, "transcript", "me", "My words");
+        add(2, 9, "transcript", "remote", "Their words");
+        add(3, 18, "screen", "passive_screen", "Price $125");
+        add(4, 4, "screen", "screen", "Earlier OCR");
+        add(5, 5, "note", "clipboard", "A pasted note");
+        let image = add(6, 6, "screen", "screenshot", "");
+        s.db.execute("INSERT INTO saved_images VALUES(?1,x'1234')", [image])
+            .unwrap();
+        add(7, 7, "screen", "clipboard", "Pasted image text");
+        let read = |passive| {
+            transcript(
+                &s,
+                &json!({"day":day,"passive_screen":passive,"with_saves":true}),
+            )
+            .unwrap()
+        };
+        let sources = |v: &Value| {
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["source"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            sources(&read(false)),
+            ["me", "remote", "clipboard", "screenshot", "clipboard"]
+        );
+        let screen = read(true);
+        assert_eq!(
+            sources(&screen),
+            [
+                "passive_screen",
+                "me",
+                "passive_screen",
+                "screen",
+                "clipboard",
+                "screenshot",
+                "clipboard"
+            ]
+        );
+        let items = screen["items"].as_array().unwrap();
+        assert!(items[2].get("image_id").is_none());
+        assert_eq!(items[5]["image_id"], image);
+        assert_eq!(
+            sources(&transcript(&s, &json!({"day":day})).unwrap()),
+            ["me", "remote"]
+        );
+        let range = |lo, hi| json!({"day":day,"from":midnight+lo,"until":midnight+hi,"source":"passive_screen"});
+        let copy = copy_time_range(&s, &range(18i64, 19i64)).unwrap();
+        assert!(copy["text"].as_str().unwrap().contains("Price $125"));
+        assert!(copy["text"].as_str().unwrap().contains("00:00:18"));
+        assert_eq!(copy["count"], 1);
+        assert!(copy_time_range(&s, &range(19, 20)).is_err());
+        for t in 20..140 {
+            add(t, t + 1, "transcript", "remote", "More remote audio");
+        }
+        assert_eq!(read(true)["total"], 7);
+        let latest = read(false);
+        let mut before = latest["older"].clone();
+        before["day"] = json!(day);
+        before["with_saves"] = json!(true);
+        let earlier = transcript(&s, &before).unwrap();
+        assert_eq!(
+            latest["items"].as_array().unwrap().len() + earlier["items"].as_array().unwrap().len(),
+            125
+        );
+    }
     #[test]
     fn silent_passages_do_not_take_up_reading_pages_sessions_or_copied_ranges() {
         let root = tempfile::tempdir().unwrap();

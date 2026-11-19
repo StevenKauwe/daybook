@@ -39,6 +39,11 @@ try {
     <div class="pt-actions"><label class="pt-sample">Sample <select data-sample aria-label="Sample recording"><option value="steady" selected>60 words/min</option><option value="pauses">Conversation with pauses</option></select></label><button type="button" class="pt-quiet" data-pick aria-pressed="false" hidden>☆ Shortlist</button></div>
   </header>
   <section class="pt-range" aria-label="Time window">
+    <div class="pt-zooms pt-reading-source" role="group" aria-label="Read alongside microphone">
+      <span>Alongside microphone</span>
+      <button type="button" data-middle="sys" aria-pressed="true">System audio</button>
+      <button type="button" data-middle="passive" aria-pressed="false">Passive screen text</button>
+    </div>
     <div class="pt-tools">
       <div class="pt-fields"><label>From <input data-from type="text" value="10:14:00" aria-label="Range start"></label><span aria-hidden="true">→</span><label>Until <input data-until type="text" value="10:15:00" aria-label="Range end"></label></div>
       <div class="pt-zooms" role="group" aria-label="Time shown"><button type="button" data-zoom="out" aria-label="Zoom out">−</button><button type="button" data-seconds="30" aria-pressed="false">30 sec</button><button type="button" data-seconds="60" aria-pressed="true">1 min</button><button type="button" data-seconds="300" aria-pressed="false">5 min</button><button type="button" data-seconds="600" aria-pressed="false">10 min</button><button type="button" data-zoom="in" aria-label="Zoom in">+</button></div>
@@ -103,6 +108,7 @@ try {
 #daybook-columns .pt-band {position:absolute;height:4px;background:var(--pt-color);border-radius:2px;opacity:.8}
 #daybook-columns [data-lane=mic] {--pt-color:var(--pt-mic)}
 #daybook-columns [data-lane=sys] {--pt-color:var(--pt-sys)}
+#daybook-columns [data-lane=passive] {--pt-color:light-dark(#386e6b,#92cec7)}
 #daybook-columns [data-lane=save] {--pt-color:var(--pt-save)}
 #daybook-columns .pt-window {position:absolute;top:1px;bottom:1px;border-block:1px solid var(--pt-focus);background:color-mix(in srgb,var(--pt-focus) 10%,transparent);pointer-events:none}
 #daybook-columns .pt-handle {appearance:none;-webkit-appearance:none;position:absolute;top:0;left:-6px;width:calc(100% + 12px);height:32px;margin:0;outline:0;background:transparent;pointer-events:none}
@@ -119,6 +125,8 @@ try {
 #daybook-columns .pt-zooms {display:flex;align-items:center;gap:2px}
 #daybook-columns .pt-zooms button {font-size:12px;padding:4px 8px;color:var(--pt-dim);background:transparent;border-color:transparent}
 #daybook-columns .pt-zooms button[aria-pressed=true] {background:var(--pt-paper);border-color:var(--pt-edge);color:var(--pt-ink)}
+#daybook-columns .pt-reading-source {flex-wrap:wrap;margin-bottom:7px}
+#daybook-columns .pt-reading-source span {font:500 12px/1.4 "Inter",-apple-system,sans-serif;color:var(--pt-dim);margin-right:5px}
 #daybook-columns .pt-scroll {position:relative;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;border-bottom:1px solid var(--pt-edge)}
 #daybook-columns .pt-grid {display:grid;width:100%;min-width:var(--pt-min,0);grid-template-columns:var(--pt-gutter,64px) repeat(var(--pt-count,3),minmax(0,1fr));align-items:stretch}
 #daybook-columns .pt-extent:not(:empty) {display:block;margin-top:4px;font-size:12px;color:var(--pt-dim)}
@@ -197,7 +205,9 @@ try {
 <script>
 function mountParallelTranscript(root, sample, pictures, remember = false) {
   const find = selector => root.querySelector(selector);
-  const lanes = { mic: 'Microphone', sys: 'System audio', save: 'Screen & clipboard' };
+  const lanes = { mic: 'Microphone', sys: 'System audio', passive: 'Passive screen text', save: 'Screenshots & clipboard' };
+  let middle = 'sys';
+  const shown = e => e.lane === 'mic' || e.lane === 'save' || e.lane === middle;
   const duration = 600;
   const origin = (10 * 60 + 14) * 60;
   const maxOffset = Number.MAX_SAFE_INTEGER - origin;
@@ -264,18 +274,16 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
   const conversation = [...sample, ...later].filter(e => e.id !== cover.id && e.text.trim()).map(e => ({
     ...e, label: e.name || lanes[e.lane], type: e.lane === 'save' ? (e.asset ? 'image' : 'clip') : 'audio'
   }));
-  const screenVisits = [[6,16], [40,46], [146,160], [312,346], [544,560]];
-  let visit = null;
-  for (let t = 0; t < duration; t += 2) {
-    const seen = screenVisits.some(([first,last]) => t >= first && t <= last);
-    if (!seen) { visit = null; continue; }
-    if (!visit) {
-      visit = {...cover, id: 'cover-' + t, type: 'monitor', label: 'On screen', at: t, end: t, samples: 0};
-      conversation.push(visit);
-    }
-    visit.end = t;
-    visit.samples++;
-  }
+  conversation.push({...cover, type:'monitor', label:'Saved screenshot'});
+  // Each range represents consecutive sightings of one line on five-second checks.
+  // The proof number changes while its title stays visible. The title later returns.
+  const sightings = [
+    [5,15,cover.text], [5,5,'Proof 3'], [10,15,'Proof 4'], [40,45,cover.text],
+    [145,160,'Uncoated · warm white'], [310,345,cover.text], [545,560,'Approved for press']
+  ];
+  sightings.forEach(([at,end,text],i) => conversation.push({
+    id:'passive-'+i, lane:'passive', type:'passive', label:lanes.passive, at, end, text
+  }));
   // Each minute contains sixty spoken words across both speakers. The image
   // and clipboard observations are shared with the quieter recording.
   const spokenMinutes = [
@@ -336,7 +344,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
   });
   const chronological = (a,b) => a.at - b.at;
   const recordings = {
-    steady: [...steadySpeech, ...conversation.filter(e => e.lane === 'save')].sort(chronological),
+    steady: [...steadySpeech, ...conversation.filter(e => e.type !== 'audio')].sort(chronological),
     pauses: conversation.sort(chronological)
   };
   let sampleName = 'steady', entries = recordings.steady;
@@ -344,11 +352,11 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
   let audioWindows = [[0,duration]];
   function intersects(e) {
     if (e.at >= until || !e.text.trim()) return false;
-    if (e.type === 'monitor') return e.end >= start;
+    if (e.type === 'passive') return e.end >= start;
     return e.end > e.at ? e.end > start : e.at >= start;
   }
   const clippedStart = e => Math.max(start, e.at);
-  const spanLabel = e => e.type === 'monitor' ? stamp(e.at) + '–' + stamp(e.end) : stamp(e.at);
+  const spanLabel = e => e.type === 'passive' && e.end > e.at ? stamp(e.at) + '–' + stamp(e.end) : stamp(e.at);
   const full = e => [0, e.text.length];
   const fullyPicked = e => picks.get(e.id)?.[0] === 0 && picks.get(e.id)?.[1] === e.text.length;
 
@@ -367,14 +375,24 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
   }
   find('[data-sample]').addEventListener('change', event => chooseSample(event.target.value));
 
+  function chooseMiddle(lane) {
+    if (!['sys','passive'].includes(lane) || lane === middle) return;
+    middle = lane;
+    root.querySelectorAll('[data-middle]').forEach(b => b.setAttribute('aria-pressed',String(b.dataset.middle === lane)));
+    previewScope = 'auto';
+    drawOverview();
+    drawGrid();
+  }
+  root.querySelectorAll('[data-middle]').forEach(b => b.addEventListener('click', () => chooseMiddle(b.dataset.middle)));
+
   function drawOverview() {
     const bands = find('.pt-bands');
     bands.replaceChildren();
-    for (const e of entries) {
+    for (const e of entries.filter(shown)) {
       const band = element('span', 'pt-band');
       band.dataset.lane = e.lane;
       Object.assign(band.style, {
-        top: ({mic: 3, sys: 10, save: 17}[e.lane]) + 'px',
+        top: ({mic: 3, sys: 10, passive: 10, save: 17}[e.lane]) + 'px',
         left: (e.at / horizon * 100) + '%',
         width: 'max(2px,' + ((e.end - e.at) / horizon * 100) + '%)'
       });
@@ -436,7 +454,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
       media.append(element('blockquote', '', e.text));
     }
     find('.pt-origin-note').textContent = e.type === 'monitor'
-      ? 'First seen ' + stamp(e.at) + ' · last seen ' + stamp(e.end) + ' · ' + e.samples + ' checks. Image from the first check.'
+      ? 'Saved at ' + stamp(e.at)
       : 'Pasted at ' + stamp(e.at);
     original.hidden = false;
     placeOriginal();
@@ -705,7 +723,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     note.hidden = true;
     if (!visible.length) return;
 
-    const speech = visible.filter(e => e.type === 'audio');
+    const speech = entries.filter(e => e.type === 'audio' && intersects(e));
     let gapStart = start, gapEnd = start;
     for (const [first,last] of audioWindows) {
       let through = Math.max(start, first);
@@ -733,7 +751,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     closeDetail();
     folds.clear();
     grid.replaceChildren();
-    visible = entries.filter(intersects);
+    visible = entries.filter(e => shown(e) && intersects(e));
     showAudioGap();
     const active = Object.keys(lanes).filter(key => visible.some(e => e.lane === key));
     const gutter = until + origin >= 86400 ? 100 : 64;
@@ -747,9 +765,9 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     if (!active.length) {
       empty.replaceChildren(element('strong','','No text in this range'));
       if (start >= duration) empty.append('The sample recording ended at ' + stamp(duration) + '.');
-      else if (audioWindows.some(([lo,hi]) => lo <= start && hi >= until - 1)) empty.append('Audio was still arriving. No words or screen text were recorded here.');
+      else if (audioWindows.some(([lo,hi]) => lo <= start && hi >= until - 1)) empty.append('Audio was still arriving. The selected sources have no text here.');
       else if (start > 55 && until <= 70) empty.append('The last audio samples arrived at 10:14:55. Input resumed at 10:15:10.');
-      else empty.append('Audio samples cover part of this range. No words or screen text were recorded here.');
+      else empty.append('Audio samples cover part of this range. The selected sources have no text here.');
       if (start >= duration) {
         const reset = button('pt-quiet','Show sample recording');
         reset.addEventListener('click', () => setBounds(0,duration));
@@ -976,15 +994,17 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     else {preview.hidden=true;find('[data-preview-toggle]').setAttribute('aria-expanded','false');}
   });
   setBounds(start,until);
+  if (remember) chooseMiddle('passive');
   if (remember && window.openai) {
     let saved, timer;
-    const snapshot = () => ({sample:sampleName, from:start, until, excerpts:[...picks]});
+    const snapshot = () => ({sample:sampleName, middle, from:start, until, excerpts:[...picks]});
     function restore(state) {
       const view = state?.privateContent?.parallelTranscript;
       if (!view || !Number.isSafeInteger(view.from) || !Number.isSafeInteger(view.until) ||
           view.from < 0 || view.until > maxOffset || view.from >= view.until) return;
       // Restore excerpts from the original sample when reopening an older study.
       chooseSample(view.sample ?? (view.excerpts?.length ? 'pauses' : 'steady'));
+      chooseMiddle(view.middle ?? 'passive');
       picks.clear();
       for (const item of Array.isArray(view.excerpts) ? view.excerpts : []) {
         if (!Array.isArray(item) || !Array.isArray(item[1])) continue;
@@ -1006,7 +1026,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
         const state = snapshot(), key = JSON.stringify(state);
         if (key === saved) return;
         saved = key;
-        window.openai?.setWidgetState?.({modelContent:{sample:find('[data-sample]').selectedOptions[0].textContent, timeWindow:[stamp(start),stamp(until)]},
+        window.openai?.setWidgetState?.({modelContent:{sample:find('[data-sample]').selectedOptions[0].textContent, alongsideMicrophone:lanes[middle], timeWindow:[stamp(start),stamp(until)]},
           privateContent:{parallelTranscript:state}})?.catch(() => {});
       },180);
     }

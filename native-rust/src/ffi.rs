@@ -187,6 +187,8 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn CFRetain(p: *const c_void) -> *const c_void;
     pub fn CFRelease(p: *const c_void);
+    pub fn CFDataGetLength(data: *const c_void) -> isize;
+    pub fn CFDataGetBytePtr(data: *const c_void) -> *const u8;
 }
 #[link(name = "CoreMedia", kind = "framework")]
 unsafe extern "C" {
@@ -207,6 +209,12 @@ unsafe extern "C" {
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     pub fn CGPreflightScreenCaptureAccess() -> bool;
+    pub fn CGImageGetDataProvider(image: *const c_void) -> *const c_void;
+    pub fn CGDataProviderCopyData(provider: *const c_void) -> *mut c_void;
+    pub fn CGWindowListCopyWindowInfo(options: u32, relative: u32) -> *mut c_void;
+    pub static kCGWindowOwnerPID: *mut AnyObject;
+    pub static kCGWindowLayer: *mut AnyObject;
+    pub static kCGWindowNumber: *mut AnyObject;
     pub fn CGColorSpaceCreateDeviceRGB() -> *mut c_void;
     pub fn CGBitmapContextCreate(
         data: *mut c_void,
@@ -218,11 +226,11 @@ unsafe extern "C" {
         info: u32,
     ) -> *mut c_void;
     pub fn CGBitmapContextCreateImage(ctx: *const c_void) -> *mut c_void;
-    pub fn CGContextDrawImage(ctx: *mut c_void, rect: Rect, image: *const c_void);
     pub fn CGContextSetRGBFillColor(ctx: *mut c_void, r: f64, g: f64, b: f64, a: f64);
     pub fn CGContextFillRect(ctx: *mut c_void, rect: Rect);
 }
 unsafe extern "C" {
+    pub fn CC_SHA256(bytes: *const c_void, len: u32, output: *mut u8) -> *mut u8;
     pub fn dispatch_queue_create(
         label: *const std::ffi::c_char,
         attr: *const c_void,

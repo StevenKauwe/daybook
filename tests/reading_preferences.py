@@ -18,7 +18,7 @@ def call(url, path, data=None):
 
 with tempfile.TemporaryDirectory(prefix="daybook-reading-test-") as directory:
     root = Path(directory)
-    choice = {"night": True, "journal": False, "size": 27}
+    choice = {"night": True, "journal": False, "size": 27, "passive_screen": True}
     initial_config = None
     for restart in [False, True]:
         address = root / "control-url.txt"
@@ -48,6 +48,7 @@ with tempfile.TemporaryDirectory(prefix="daybook-reading-test-") as directory:
             overview = call(base, "/overview")
             assert overview["active"] == overview["armed"] == "false" and not overview["pending"]
             assert overview["reading"] == choice and overview["config"] == initial_config
+            assert call(base, "/live")["transcript"]["passive_screen"] is True
             call(base, "/command", {"command": "quit"})
             app.wait(5)
         finally:

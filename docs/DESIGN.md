@@ -1,6 +1,6 @@
 # Reading and recording in Daybook
 
-The live workspace pairs a dark audio monitor with a journal. Recorder state and the Start or Stop control stay visible while switching pages or reading back. Paper uses a warm background, dark ink and a spruce navigation rail. Night uses a deep green reading surface with mint microphone and lilac system accents. Both retain explicit labels for each input and state.
+The live workspace pairs a dark audio monitor with a journal. Switch between system audio and passive screen text alongside the microphone. Manual screenshots and clipboard entries are visible with either choice. Recorder state and the Start or Stop control stay visible while switching pages or reading back. Paper uses a warm background, dark ink and a spruce navigation rail. Night uses a deep green reading surface with mint microphone and lilac system accents. Both retain explicit labels for each input and state.
 
 | Surface | Behavior |
 | --- | --- |

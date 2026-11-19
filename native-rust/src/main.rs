@@ -8,6 +8,9 @@ mod meters;
 mod mic_meter;
 mod ocr_bench;
 mod screen;
+#[path = "../../src/screen_sample.rs"]
+mod screen_sample;
+use screen_sample::ScreenSample;
 mod state;
 use block2::RcBlock;
 use chrono::{Datelike, Timelike};
@@ -76,7 +79,6 @@ struct Settings {
     #[serde(default)]
     audio_storage: String,
     screen_seconds: u64,
-    retain_images: bool,
     work_start_hour: u32,
     work_end_hour: u32,
     weekdays_only: bool,
@@ -86,11 +88,11 @@ struct Settings {
 enum Event {
     Command(String),
     Notification(String),
-    Content(u64, bool, Result<Shareable, String>),
+    Content(u64, Option<u64>, Result<Shareable, String>),
     Started(u64, Option<String>),
     Stopped(u64, Option<String>),
     Flushed(u64),
-    Screenshot(u64, Result<Image, String>),
+    Screenshot(u64, ScreenSample, Result<Image, String>),
     ScreenDone(u64, Result<Value, String>),
     PermissionDone,
     Fault(String),
@@ -259,15 +261,53 @@ struct App {
     screens_deferred: bool,
     screen_busy: bool,
     last_screen: Instant,
-    previous: Option<Vec<u8>>,
+    screen_sequence: u64,
     screen_worker: SyncSender<ScreenJob>,
     stop_since: Option<Instant>,
 }
 struct ScreenJob {
     epoch: u64,
     image: Image,
-    settings: Settings,
-    root: PathBuf,
+    sample: ScreenSample,
+    interval: u64,
+}
+fn screen_worker(rx: mpsc::Receiver<ScreenJob>) {
+    unsafe {
+        pthread_set_qos_class_self_np(0x11, 0);
+    }
+    let mut previous: Option<(ScreenSample, [u8; 32])> = None;
+    for job in rx {
+        let result = autoreleasepool(|_| unsafe {
+            screen_reading(&job.image, job.sample, job.interval, &mut previous)
+        });
+        event(Event::ScreenDone(job.epoch, result));
+    }
+}
+
+unsafe fn screen_reading(
+    image: &Image,
+    sample: ScreenSample,
+    interval: u64,
+    previous: &mut Option<(ScreenSample, [u8; 32])>,
+) -> Result<Value, String> {
+    let signature = screen::fingerprint(image);
+    let same = previous
+        .take()
+        .is_some_and(|(last, hash)| sample.follows(&last, interval) && signature == Some(hash));
+    let message = if same {
+        json!({"type":"screen_unchanged","sample":sample})
+    } else {
+        let (text, words) = screen::recognize(image)?;
+        let mut message = json!({"type":"screen","sample":sample,"text":text,"words":words});
+        // Keep all recognized lines within the bridge's 256 KiB message limit.
+        while message.to_string().len() > 255 * 1024 {
+            let boxes = message["words"].as_array_mut().unwrap();
+            boxes.truncate(boxes.len() / 2);
+        }
+        message
+    };
+    *previous = signature.map(|hash| (sample, hash));
+    Ok(message)
 }
 impl App {
     unsafe fn new(root: PathBuf, settings: Settings, url: String) -> Result<Self, String> {
@@ -324,7 +364,10 @@ impl App {
             return Err("Could not create audio callback queue".into());
         }
         let (tx, rx) = mpsc::sync_channel::<ScreenJob>(1);
-        std::thread::Builder::new().name("daybook-ocr".into()).spawn(move||{unsafe{pthread_set_qos_class_self_np(0x11,0);}for job in rx{let result=autoreleasepool(|_|unsafe{let(text,words)=if ["ocr","both"].contains(&job.settings.screen_mode.as_str()){screen::recognize(&job.image)?}else{(String::new(),Vec::new())};let path=if job.settings.retain_images||["vision","both"].contains(&job.settings.screen_mode.as_str()){screen::save_jpeg(&job.image,&job.root)?}else{String::new()};Ok(json!({"type":"screen","at":stamp(),"text":text,"words":words,"path":path,"coordinates":"normalized bottom-left; word boxes"}))});event(Event::ScreenDone(job.epoch,result));}}).map_err(|e|e.to_string())?;
+        std::thread::Builder::new()
+            .name("daybook-ocr".into())
+            .spawn(move || screen_worker(rx))
+            .map_err(|e| e.to_string())?;
         let _: () = msg_send![&*app, finishLaunching];
         let this = Self {
             synthetic: std::env::var("DAYBOOK_SYNTHETIC").ok().as_deref() == Some("1"),
@@ -353,7 +396,7 @@ impl App {
             screens_deferred: false,
             screen_busy: false,
             last_screen: Instant::now() - Duration::from_secs(86400),
-            previous: None,
+            screen_sequence: 0,
             screen_worker: tx,
             stop_since: None,
         };
@@ -545,7 +588,13 @@ impl App {
                 self.quit_requested = true;
                 self.stop("stopped")
             }
-            "defer_screens" => self.screens_deferred = true,
+            "defer_screens" => {
+                if !self.screens_deferred {
+                    self.screen_sequence += 1;
+                }
+                self.screens_deferred = true;
+            }
+            "refresh_screen" => self.screen_sequence += 1,
             "allow_screens" => self.screens_deferred = false,
             "permission_refresh" => permission_status(),
             "permission_mic" => self.request_microphone(),
@@ -587,6 +636,7 @@ impl App {
     }
     unsafe fn request_content(&self, screen: bool) {
         let token = self.epoch;
+        let sequence = screen.then_some(self.screen_sequence);
         let callback = RcBlock::new(move |content: *mut AnyObject, err: *mut AnyObject| {
             let result = if let Some(e) = error(err) {
                 Err(e)
@@ -595,7 +645,7 @@ impl App {
                     .map(Shareable)
                     .ok_or("No shareable display content".into())
             };
-            event(Event::Content(token, screen, result));
+            event(Event::Content(token, sequence, result));
         });
         let _: () = msg_send![class(c"SCShareableContent"),getShareableContentExcludingDesktopWindows:false, onScreenWindowsOnly:true, completionHandler:&*callback];
     }
@@ -643,13 +693,27 @@ impl App {
             let _: () = msg_send![&*config,setWidth:1280usize];
             let _: () = msg_send![&*config,setHeight:(height*1280/width.max(1)).clamp(1,4096)];
             let _: () = msg_send![&*config,setShowsCursor:false];
+            let display_id: u32 = msg_send![display, displayID];
+            let (pid, window) = screen::foreground_window();
+            let sequence = self.screen_sequence;
+            let target = if pid == 0 {
+                format!("{display_id}/unknown/{sequence}")
+            } else {
+                format!("{display_id}/{width}x{height}/{pid}/{window}")
+            };
             let callback = RcBlock::new(move |image: *mut c_void, err: *mut AnyObject| {
                 let result = if let Some(e) = error(err) {
                     Err(e)
                 } else {
                     Image::retained(image).ok_or("No screenshot image returned".into())
                 };
-                event(Event::Screenshot(token, result));
+                let sample = ScreenSample {
+                    session: format!("{}-{token}", std::process::id()),
+                    sequence,
+                    target: target.clone(),
+                    at: stamp() as i64,
+                };
+                event(Event::Screenshot(token, sample, result));
             });
             let _: () = msg_send![class(c"SCScreenshotManager"),captureImageWithFilter:&*filter, configuration:&*config, completionHandler:&*callback];
             return Ok(());
@@ -842,6 +906,7 @@ impl App {
             && self.last_screen.elapsed() >= Duration::from_secs(self.settings.screen_seconds)
         {
             self.screen_busy = true;
+            self.screen_sequence += 1;
             self.last_screen = Instant::now();
             self.request_content(true)
         }
@@ -882,8 +947,14 @@ impl App {
                     }
                 }
             }
-            Event::Content(token, screen, result) => {
+            Event::Content(token, sequence, result) => {
+                let screen = sequence.is_some();
                 if token == self.epoch {
+                    if sequence.is_some_and(|n| self.screens_deferred || n != self.screen_sequence)
+                    {
+                        self.screen_busy = false;
+                        return;
+                    }
                     match result {
                         Ok(c) => {
                             if let Err(e) = self.content(token, screen, c) {
@@ -944,8 +1015,12 @@ impl App {
                     self.quit = true;
                 }
             }
-            Event::Screenshot(token, result) => {
+            Event::Screenshot(token, sample, result) => {
                 if token != self.epoch || !self.active {
+                    return;
+                }
+                if self.screens_deferred || sample.sequence != self.screen_sequence {
+                    self.screen_busy = false;
                     return;
                 }
                 match result {
@@ -953,44 +1028,25 @@ impl App {
                         self.screen_busy = false;
                         emit(json!({"type":"error","message":e}));
                     }
-                    Ok(image) => match screen::thumbnail(&image) {
-                        Err(e) => {
+                    Ok(image) => {
+                        if self
+                            .screen_worker
+                            .try_send(ScreenJob {
+                                epoch: token,
+                                image,
+                                sample,
+                                interval: self.settings.screen_seconds,
+                            })
+                            .is_err()
+                        {
                             self.screen_busy = false;
-                            emit(json!({"type":"error","message":e}));
+                            emit(json!({"type":"error","message":"OCR worker capacity reached"}));
                         }
-                        Ok(pixels) => {
-                            if !screen::changed(self.previous.as_deref(), &pixels) {
-                                self.screen_busy = false;
-                                emit(json!({"type":"screen_unchanged"}));
-                            } else {
-                                self.previous = Some(pixels);
-                                if self
-                                    .screen_worker
-                                    .try_send(ScreenJob {
-                                        epoch: token,
-                                        image,
-                                        settings: self.settings.clone(),
-                                        root: self.root.clone(),
-                                    })
-                                    .is_err()
-                                {
-                                    self.screen_busy = false;
-                                    emit(
-                                        json!({"type":"error","message":"OCR worker capacity reached"}),
-                                    );
-                                }
-                            }
-                        }
-                    },
+                    }
                 }
             }
             Event::ScreenDone(token, result) => {
                 if token != self.epoch || !self.active {
-                    if let Ok(v) = result {
-                        if let Some(p) = v["path"].as_str().filter(|p| !p.is_empty()) {
-                            let _ = std::fs::remove_file(self.root.join(p));
-                        }
-                    }
                     return;
                 }
                 self.screen_busy = false;
@@ -1118,19 +1174,39 @@ fn run() -> Result<(), String> {
     if args.iter().any(|a| a == "--self-test-ocr") {
         return unsafe {
             let image = screen::synthetic_image()?;
-            let (text, words) = screen::recognize(&image)?;
+            let mut previous = None;
+            let sample = |sequence, target: &str| ScreenSample {
+                session: "fixture".into(),
+                sequence,
+                target: target.into(),
+                at: 100 + sequence as i64 * 5,
+            };
+            let first = screen_reading(&image, sample(1, "a"), 5, &mut previous)?;
+            let text = first["text"].as_str().ok_or("Missing text")?;
+            let words = first["words"].as_array().ok_or("Missing word boxes")?;
             if !text.contains("Daybook") || words.len() < 3 {
                 return Err("Synthetic OCR fixture mismatch".into());
             }
-            for word in &words {
-                if word["width"].as_f64().unwrap_or(0.0) <= 0.0 {
+            for word in words {
+                if word["width"].as_f64().unwrap_or(0.0) <= 0.0 || word["line"] != 0 {
                     return Err("OCR word box invalid".into());
                 }
             }
-            let pixels = screen::thumbnail(&image)?;
-            assert!(!screen::changed(Some(&pixels), &pixels));
+            let same = screen_reading(&image, sample(2, "a"), 5, &mut previous)?;
+            let moved = screen_reading(&image, sample(3, "b"), 5, &mut previous)?;
+            let blank = screen::drawn_image(800, 180, 0)?;
+            let cleared = screen_reading(&blank, sample(4, "b"), 5, &mut previous)?;
+            if same["type"] != "screen_unchanged"
+                || same["sample"]["at"] != 110
+                || !same["text"].is_null()
+                || moved["text"] != first["text"]
+                || cleared["text"] != ""
+                || first.as_object().unwrap().len() != 4
+            {
+                return Err("Passive screen change detection or text-only payload mismatch".into());
+            }
             emit(
-                json!({"type":"test","result":"PASS Rust native Vision OCR and word boxes","text":text,"words":words.len()}),
+                json!({"type":"test","result":"PASS Rust native Vision OCR and word boxes, repeated frames, window changes and blank screens","text":text,"words":words.len()}),
             );
             Ok(())
         };

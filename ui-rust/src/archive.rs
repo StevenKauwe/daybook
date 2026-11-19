@@ -131,7 +131,9 @@ impl Archive {
             let kind = item["kind"].as_str().unwrap_or("");
             let source = item["source"].as_str().unwrap_or("");
             let label = reading::entry_label(kind, source);
-            let preview = if kind == "screen" {
+            let text_only = matches!(source, "passive_screen" | "screen" | "vision")
+                && !item["image_id"].is_i64();
+            let preview = if kind == "screen" && !text_only {
                 Preview::Image(item["image_id"].as_i64())
             } else if item["note_cover"].is_i64()
                 && item["text"]
@@ -558,7 +560,7 @@ impl Controls {
                     ("all", "All sources"),
                     ("me", "Me"),
                     ("remote", "System audio"),
-                    ("screen", "Screen text"),
+                    ("screen", "Passive screen text"),
                     ("vision", "Screen descriptions"),
                     ("clipboard", "Clipboard"),
                     ("screenshot", "Saved screenshots"),

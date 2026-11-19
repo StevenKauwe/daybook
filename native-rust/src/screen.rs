@@ -5,46 +5,56 @@ use objc2::{msg_send, rc::autoreleasepool, runtime::AnyObject};
 use objc2_foundation::NSRange;
 use serde_json::{Value, json};
 use std::{path::Path, ptr};
-pub fn changed(old: Option<&[u8]>, new: &[u8]) -> bool {
-    match old {
-        Some(old) if old.len() == new.len() && !new.is_empty() => {
-            old.iter()
-                .zip(new)
-                .map(|(&a, &b)| (a as i64 - b as i64).unsigned_abs())
-                .sum::<u64>() as f64
-                / new.len() as f64
-                >= 3.0
-        }
-        _ => true,
+/// Only this digest survives the check. If pixels are unavailable, run OCR.
+pub unsafe fn fingerprint(image: &Image) -> Option<[u8; 32]> {
+    let provider = CGImageGetDataProvider(image.0.0);
+    if provider.is_null() {
+        return None;
     }
+    let data = Cf(CGDataProviderCopyData(provider));
+    if data.0.is_null() {
+        return None;
+    }
+    let len = u32::try_from(CFDataGetLength(data.0)).ok()?;
+    let bytes = CFDataGetBytePtr(data.0);
+    if bytes.is_null() || len == 0 {
+        return None;
+    }
+    let mut digest = [0; 32];
+    CC_SHA256(bytes.cast(), len, digest.as_mut_ptr());
+    Some(digest)
 }
-pub unsafe fn thumbnail(image: &Image) -> Result<Vec<u8>, String> {
-    let mut bytes = vec![0u8; 64 * 36 * 4];
-    let space = Cf(CGColorSpaceCreateDeviceRGB());
-    let context = Cf(CGBitmapContextCreate(
-        bytes.as_mut_ptr().cast(),
-        64,
-        36,
-        8,
-        64 * 4,
-        space.0,
-        1,
-    ));
-    if context.0.is_null() {
-        return Err("Could not allocate comparison image".into());
+
+/// Inspect only the frontmost app's window number; never read window titles.
+pub unsafe fn foreground_window() -> (i32, u32) {
+    let workspace: Obj = msg_send![class(c"NSWorkspace"), sharedWorkspace];
+    let app: *mut AnyObject = msg_send![&*workspace, frontmostApplication];
+    if app.is_null() {
+        return (0, 0);
     }
-    CGContextDrawImage(
-        context.0,
-        Rect {
-            origin: Point::default(),
-            size: Size {
-                width: 64.0,
-                height: 36.0,
-            },
-        },
-        image.0.0,
-    );
-    Ok(bytes)
+    let pid: i32 = msg_send![app, processIdentifier];
+    let list = Cf(CGWindowListCopyWindowInfo(1 | 16, 0));
+    if !list.0.is_null() {
+        let array = list.0.cast::<AnyObject>();
+        let count: usize = msg_send![array, count];
+        for i in 0..count {
+            let window: *mut AnyObject = msg_send![array,objectAtIndex:i];
+            let owner: *mut AnyObject = msg_send![window,objectForKey:kCGWindowOwnerPID];
+            let layer: *mut AnyObject = msg_send![window,objectForKey:kCGWindowLayer];
+            if owner.is_null() || layer.is_null() {
+                continue;
+            }
+            let window_pid: i32 = msg_send![owner, intValue];
+            let level: i32 = msg_send![layer, intValue];
+            if window_pid == pid && level == 0 {
+                let number: *mut AnyObject = msg_send![window,objectForKey:kCGWindowNumber];
+                if !number.is_null() {
+                    return (pid, msg_send![number, unsignedIntValue]);
+                }
+            }
+        }
+    }
+    (pid, 0)
 }
 pub unsafe fn recognize(image: &Image) -> Result<(String, Vec<Value>), String> {
     read_image_text(image, true)
@@ -76,6 +86,7 @@ unsafe fn read_image_text(
         let count: usize = msg_send![results, count];
         let mut text_out = String::new();
         let mut words = Vec::new();
+        let mut line_index = 0;
         let lines = if with_word_boxes {
             count.min(200)
         } else {
@@ -91,6 +102,9 @@ unsafe fn read_image_text(
             let candidate: *mut AnyObject = msg_send![candidates,objectAtIndex:0usize];
             let string_ptr: *mut AnyObject = msg_send![candidate, string];
             let line = text(string_ptr);
+            if with_word_boxes && text_out.len() + line.len() + 1 > 16000 {
+                break;
+            }
             let confidence: f32 = msg_send![candidate, confidence];
             text_out.push_str(&line);
             text_out.push('\n');
@@ -121,11 +135,9 @@ unsafe fn read_image_text(
                     continue;
                 }
                 let r: Rect = msg_send![box_, boundingBox];
-                words.push(json!({"text":word.chars().take(128).collect::<String>(),"x":r.origin.x,"y":r.origin.y,"width":r.size.width,"height":r.size.height,"confidence":confidence}));
+                words.push(json!({"line":line_index,"text":word.chars().take(128).collect::<String>(),"x":r.origin.x,"y":r.origin.y,"width":r.size.width,"height":r.size.height,"confidence":confidence}));
             }
-        }
-        while with_word_boxes && text_out.len() > 16000 {
-            text_out.pop();
+            line_index += 1;
         }
         Ok((text_out, words))
     })
@@ -229,12 +241,46 @@ pub unsafe fn drawn_image(width: usize, height: usize, lines: usize) -> Result<I
         }
     })
 }
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn change_detection() {
-        assert!(!super::changed(Some(&[0; 8]), &[0; 8]));
-        assert!(!super::changed(Some(&[0; 8]), &[2; 8]));
-        assert!(super::changed(Some(&[0; 8]), &[255; 8]));
+    fn a_single_changed_pixel_changes_the_fingerprint() {
+        unsafe {
+            let space = Cf(CGColorSpaceCreateDeviceRGB());
+            let canvas = Cf(CGBitmapContextCreate(
+                ptr::null_mut(),
+                1280,
+                64,
+                8,
+                0,
+                space.0,
+                1,
+            ));
+            assert!(!canvas.0.is_null());
+            let fill = |w, h| {
+                CGContextFillRect(
+                    canvas.0,
+                    Rect {
+                        origin: Point::default(),
+                        size: Size {
+                            width: w,
+                            height: h,
+                        },
+                    },
+                )
+            };
+            CGContextSetRGBFillColor(canvas.0, 1., 1., 1., 1.);
+            fill(1280., 64.);
+            let before = Image(Cf(CGBitmapContextCreateImage(canvas.0)));
+            let first = fingerprint(&before).unwrap();
+            CGContextSetRGBFillColor(canvas.0, 0., 0., 0., 1.);
+            fill(1., 1.);
+            let after = Image(Cf(CGBitmapContextCreateImage(canvas.0)));
+            assert_ne!(first, fingerprint(&after).unwrap());
+            assert_eq!(Some(first), fingerprint(&before));
+        }
     }
 }

@@ -68,9 +68,89 @@ pub fn observe(s: &Store, v: &Value, interval: u64) -> Result<()> {
     Ok(())
 }
 
+/// Browse by first sighting so extending a live visit cannot move it across pages.
+pub fn history(s: &Store, request: &Value) -> Result<Value> {
+    let query = request["query"].as_str().unwrap_or("").trim();
+    if query.chars().count() > 200 {
+        return Err("Search up to 200 characters of screen text.".into());
+    }
+    let cursor = serde_json::from_value::<Option<[i64; 2]>>(request["before"].clone())?
+        .unwrap_or([i64::MAX, i64::MIN]);
+    let mut stmt = s.db.prepare_cached(
+        "SELECT id,at,max(at,end_at),substr(text,1,2048),length(text)>2048
+         FROM observations WHERE kind='screen' AND source IN ('passive_screen','screen','vision')
+         AND at<=?1 AND (at<?1 OR id>?2) AND trim(text)<>'' AND (?3='' OR instr(lower(text),lower(?3))>0)
+         ORDER BY at DESC,id ASC LIMIT 51",
+    )?;
+    let mut items = stmt
+        .query_map(params![cursor[0], cursor[1], query], |row| {
+            Ok(json!({
+                "id":row.get::<_,i64>(0)?, "at":row.get::<_,i64>(1)?, "end":row.get::<_,i64>(2)?,
+                "text":row.get::<_,String>(3)?, "truncated":row.get::<_,bool>(4)?
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let more = items.len() > 50;
+    items.truncate(50);
+    let next = items
+        .last()
+        .filter(|_| more)
+        .map(|p| json!([p["at"], p["id"]]));
+    Ok(json!({"items":items, "next":next}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_paginates_equal_times_and_updates_a_visit_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(dir.path()).unwrap();
+        let add = |source, text: &str| {
+            s.observation(100, 100, "screen", source, text, &json!({}), None)
+                .unwrap()
+        };
+        add("clipboard", "pasted private sample");
+        add("screenshot", "manual picture");
+        add("screen", "");
+        let old = add("screen", "Legacy text");
+        let long = add("vision", &format!("{} Needle", "a".repeat(3000)));
+        for n in 0..53 {
+            add("passive_screen", &format!("Sample line {n}"));
+        }
+        let first = history(&s, &json!({})).unwrap();
+        let second = history(&s, &json!({"before":first["next"]})).unwrap();
+        let all: Vec<_> = [
+            first["items"].as_array().unwrap(),
+            second["items"].as_array().unwrap(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        assert_eq!(all.len(), 55);
+        assert_eq!(
+            all.iter()
+                .map(|i| i["id"].as_i64().unwrap())
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            55
+        );
+        assert_eq!(all.first().unwrap()["id"], old);
+        assert!(second["next"].is_null());
+        s.db.execute("UPDATE observations SET end_at=150 WHERE id=?1", [long])
+            .unwrap();
+        let match_page = history(&s, &json!({"query":"needle"})).unwrap();
+        let hit = &match_page["items"][0];
+        assert_eq!(hit["id"], long);
+        assert_eq!(hit["at"], 100);
+        assert_eq!(hit["end"], 150);
+        assert_eq!(hit["truncated"], true);
+        assert_eq!(
+            history(&s, &json!({"query":"manual"})).unwrap()["items"],
+            json!([])
+        );
+    }
 
     fn frame(seq: i64, at: i64, window: &str, text: Option<&str>) -> Value {
         let mut value = json!({"type":"screen_unchanged","sample":{"sequence":seq,"at":at,"session":"a","target":window}});

@@ -116,12 +116,25 @@ fn bridge(
     Ok(Bridge { child, input })
 }
 fn write_config(root: &Path, c: &Config) -> Result<()> {
+    persist_settings(root, c, None, provider::save_key)
+}
+fn persist_settings(
+    root: &Path,
+    c: &Config,
+    new_key: Option<&str>,
+    store_key: impl FnOnce(&str, &str) -> Result<()>,
+) -> Result<()> {
     c.validate()?;
-    let p = root.join("config.tmp");
-    let mut f = std::fs::File::create(&p)?;
-    f.write_all(&serde_json::to_vec_pretty(c)?)?;
-    f.sync_all()?;
-    std::fs::rename(p, root.join("config.json"))?;
+    let mut staged = tempfile::NamedTempFile::new_in(root)?;
+    serde_json::to_writer_pretty(staged.as_file_mut(), c)?;
+    staged.as_file().sync_all()?;
+    if let Some(key) = new_key {
+        if c.summary.keychain_account.is_empty() {
+            return Err("Choose Mac Keychain to store this API key.".into());
+        }
+        store_key(&c.summary.keychain_account, key)?;
+    }
+    staged.persist(root.join("config.json"))?;
     Ok(())
 }
 fn ingest(s: &Store, c: &Config, v: &Value, inbox: &live_audio::Shared) -> Result<()> {
@@ -601,7 +614,7 @@ fn run() -> Result<()> {
             }) {
                 return Err("JSON Content-Type required".into());
             }
-            let mut body = Vec::new();
+            let mut body = zeroize::Zeroizing::new(Vec::new());
             request
                 .as_reader()
                 .take(128 * 1024 + 1)
@@ -609,7 +622,8 @@ fn run() -> Result<()> {
             if body.len() > 128 * 1024 {
                 return Err("request too large".into());
             }
-            let v: Value = serde_json::from_slice(&body)?;
+            let mut v: Value = serde_json::from_slice(&body)?;
+            drop(body);
             match endpoint {
                 "/resume_workspace" => {
                     return Ok(resume_workspace.take().unwrap_or(Value::Null).to_string());
@@ -628,6 +642,7 @@ fn run() -> Result<()> {
                     return Ok(update::status(&root, synthetic).to_string());
                 }
                 "/timeline" => return Ok(inspect::timeline(&s, &v)?.to_string()),
+                "/screen_text" => return Ok(passive::history(&s, &v)?.to_string()),
                 "/transcript_window" => return Ok(parallel::window(&s, &v)?.to_string()),
                 "/transcript_passages" => return Ok(parallel::passages(&s, &v)?.to_string()),
                 "/copy_transcript" => return Ok(parallel::copy(&s, &v)?.to_string()),
@@ -787,17 +802,29 @@ fn run() -> Result<()> {
                         _ => return Err("unknown command".into()),
                     }
                 }
-                "/config" => {
+                "/config" | "/config_with_key" => {
                     if update::busy(&root) {
                         return Err("Wait for the update before changing settings".into());
                     }
                     if s.get("active") == "true" || s.get("armed") == "true" {
                         return Err("Stop recording before changing settings".into());
                     }
-                    let mut next: Config = serde_json::from_value(v)?;
+                    let (settings, secret) = if endpoint == "/config_with_key" {
+                        let Value::String(key) = v["api_key"].take() else {
+                            return Err("Enter an API key to save.".into());
+                        };
+                        (v["config"].take(), Some(zeroize::Zeroizing::new(key)))
+                    } else {
+                        (v, None)
+                    };
+                    let mut next: Config = serde_json::from_value(settings)?;
                     next.migrate_screen_mode();
-                    next.validate()?;
-                    write_config(&root, &next)?;
+                    persist_settings(
+                        &root,
+                        &next,
+                        secret.as_ref().map(|s| s.as_str()),
+                        provider::save_key,
+                    )?;
                     c = next;
                     if let Some(b) = &mut native {
                         b.send("reload");
@@ -904,6 +931,36 @@ fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn credential_settings_keep_old_config_on_keychain_error_and_only_persist_the_reference() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let mut c = Config::default();
+        write_config(dir, &c).unwrap();
+        let file = dir.join("config.json");
+        let before = std::fs::read(&file).unwrap();
+        c.summary.keychain_account = "Test summary".into();
+        let sample = "synthetic-value-for-storage-test";
+        assert!(
+            persist_settings(dir, &c, Some(sample), |_, _| Err(
+                "Test Keychain denied".into()
+            ))
+            .is_err()
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        persist_settings(dir, &c, Some(sample), |a, k| {
+            assert_eq!((a, k), ("Test summary", sample));
+            Ok(())
+        })
+        .unwrap();
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(!saved.contains(sample) && saved.contains("Test summary"));
+        c.summary.api_key_env = "an invalid name".into();
+        c.summary.keychain_account.clear();
+        assert!(persist_settings(dir, &c, None, |_, _| panic!()).is_err());
+        assert_eq!(std::fs::read_to_string(file).unwrap(), saved);
+    }
+
     #[test]
     fn audio_loss_is_durable_visible_and_does_not_stop_recording() {
         let root = std::env::temp_dir().join(format!("daybook-audio-gap-{}", std::process::id()));

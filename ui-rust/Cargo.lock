@@ -714,6 +714,7 @@ dependencies = [
  "serde_json",
  "ureq",
  "url",
+ "zeroize",
 ]
 
 [[package]]

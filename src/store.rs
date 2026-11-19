@@ -34,6 +34,7 @@ impl Store {
  CREATE TABLE IF NOT EXISTS job_parts(job_id INTEGER NOT NULL REFERENCES jobs(id),part INTEGER NOT NULL,input TEXT NOT NULL,result TEXT,PRIMARY KEY(job_id,part));
  CREATE TABLE IF NOT EXISTS export_dirty(day TEXT PRIMARY KEY);
  CREATE TABLE IF NOT EXISTS job_days(job_id INTEGER NOT NULL REFERENCES jobs(id),day TEXT NOT NULL,PRIMARY KEY(job_id,day));
+ CREATE INDEX IF NOT EXISTS obs_passive_history ON observations(at DESC,id ASC) WHERE kind='screen' AND source IN ('passive_screen','screen','vision');
  CREATE INDEX IF NOT EXISTS obs_at ON observations(at); CREATE INDEX IF NOT EXISTS source_status ON sources(status,id);
  CREATE INDEX IF NOT EXISTS obs_span_end ON observations(end_at,at) WHERE end_at>at;
  CREATE INDEX IF NOT EXISTS obs_pending_ocr ON observations(id) WHERE kind='screen' AND json_extract(details,'$.ocr_status')='pending';

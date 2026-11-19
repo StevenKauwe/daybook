@@ -17,6 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 mod archive;
+mod credentials;
 mod design;
 mod keywords;
 mod live;
@@ -31,6 +32,7 @@ mod preview;
 #[path = "../../src/reading.rs"]
 mod reading;
 mod scope;
+mod screen_history;
 #[path = "../../src/transcript_range.rs"]
 mod transcript_range;
 mod workspace;
@@ -58,7 +60,11 @@ fn call_with(
     body: Option<&Value>,
 ) -> Result<Value, String> {
     let response = if let Some(v) = body {
-        agent.post(&format!("{base}{path}")).send_json(v.clone())
+        let mut request = agent.post(&format!("{base}{path}"));
+        if path == "/config_with_key" {
+            request = request.timeout(Duration::from_secs(120));
+        }
+        request.send_json(v)
     } else {
         agent.get(&format!("{base}{path}")).call()
     };
@@ -229,6 +235,7 @@ struct Controls {
     last_timeline: Instant,
     loading_timeline: bool,
     archive: archive::Archive,
+    screen_history: screen_history::History,
     picture: picture::Viewer,
     thumbnails: picture::Thumbnails,
     detail: Value,
@@ -237,6 +244,8 @@ struct Controls {
     export: String,
     show_export: bool,
     import: String,
+    credentials: credentials::Credentials,
+    settings_saving: bool,
     quitting: bool,
     stream_page: Value,
     reader: live::Reader,
@@ -297,7 +306,7 @@ impl Controls {
                     1000
                 });
                 // A click always precedes scheduled polling when both are ready.
-                let r = if let Ok(r) = requests.try_recv() {
+                let mut r = if let Ok(r) = requests.try_recv() {
                     r
                 } else if last_overview.elapsed() >= overview_interval {
                     Request {
@@ -348,6 +357,14 @@ impl Controls {
                             || v["capture_transition"] == "true"
                             || v["pending"].as_u64().unwrap_or(0) > 0;
                     }
+                }
+                // The reply only carries settings references, even on a transport error.
+                if r.path == "/config_with_key" {
+                    let mut envelope = r.body.take().unwrap_or_default();
+                    if let Value::String(mut key) = envelope["api_key"].take() {
+                        zeroize::Zeroize::zeroize(&mut key);
+                    }
+                    r.body = Some(envelope["config"].take());
                 }
                 if replies
                     .send(Reply {
@@ -409,6 +426,7 @@ impl Controls {
             last_timeline: Instant::now(),
             loading_timeline: false,
             archive: Default::default(),
+            screen_history: Default::default(),
             picture: Default::default(),
             thumbnails: Default::default(),
             detail: Value::Null,
@@ -417,6 +435,8 @@ impl Controls {
             export: String::new(),
             show_export: false,
             import: String::new(),
+            credentials: Default::default(),
+            settings_saving: false,
             quitting: false,
             stream_page: Value::Null,
             reader: Default::default(),
@@ -461,6 +481,7 @@ impl Controls {
         if self.send("/command", Some(json!({"command":c}))) {
             if c == "start" {
                 self.parallel.fixed = None;
+                self.parallel.ruler = None;
                 self.parallel.clear_picks();
                 self.parallel.detail = None;
                 self.tab = 0;
@@ -680,6 +701,9 @@ impl Controls {
             if r.path == "/copy_time_range" {
                 self.archive.copying = false;
             }
+            if matches!(r.path.as_str(), "/config" | "/config_with_key") {
+                self.settings_saving = false;
+            }
             if r.path == "/command" {
                 self.pending_action = false;
             }
@@ -688,6 +712,10 @@ impl Controls {
             }
             if r.path == "/note" {
                 self.saving_note = false;
+            }
+            if r.path == "/screen_text" {
+                self.screen_history.reply(r);
+                continue;
             }
             if matches!(
                 r.path.as_str(),
@@ -769,9 +797,12 @@ impl Controls {
                             self.draft_images = ids.iter().filter_map(Value::as_i64).collect();
                         }
                         if !self.loaded {
-                            if let Ok(c) = serde_json::from_value(v["config"].clone()) {
+                            if let Ok(c) =
+                                serde_json::from_value::<config::Config>(v["config"].clone())
+                            {
                                 self.reading =
                                     reading::ReadingStyle::saved(&v["reading"].to_string());
+                                self.credentials.reset(&c.summary);
                                 self.saved_config = serde_json::to_value(&c).unwrap();
                                 self.config = c;
                                 self.note = v["draft"].as_str().unwrap_or("").into();
@@ -909,9 +940,19 @@ impl Controls {
                         self.error.clear();
                         self.send("/overview", None);
                     }
-                    "/config" => {
+                    "/config" | "/config_with_key" => {
+                        if r.path == "/config_with_key" {
+                            zeroize::Zeroize::zeroize(&mut *self.credentials.secret);
+                            self.notice =
+                                Some(("API key saved in Mac Keychain".into(), Instant::now()));
+                        }
                         self.saved_config = r.body.unwrap_or(Value::Null);
-                        self.message = "Settings saved. Recording remains stopped.".into();
+                        self.message = if r.path == "/config_with_key" {
+                            "API key saved in Mac Keychain. Settings saved."
+                        } else {
+                            "Settings saved. Recording remains stopped."
+                        }
+                        .into();
                         self.error.clear();
                         self.send("/overview", None);
                     }
@@ -929,6 +970,7 @@ impl Controls {
                     }
                     "/import" => {
                         if let Ok(p) = serde_json::from_value(v) {
+                            self.credentials.reset(&p);
                             self.config.summary = p;
                             self.message =
                                 "Provider metadata imported into your draft. Review and save."
@@ -1417,7 +1459,33 @@ impl Controls {
             );
         });
     }
+    fn submit_settings(&mut self) {
+        if self.settings_saving {
+            return;
+        }
+        if let Err(e) = self
+            .credentials
+            .validate(&self.config.summary)
+            .and_then(|_| self.config.validate())
+        {
+            self.error = e;
+            return;
+        }
+        let settings = json!(&self.config);
+        let (path, body) = if self.credentials.secret.is_empty() {
+            ("/config", settings)
+        } else {
+            (
+                "/config_with_key",
+                json!({"config":settings, "api_key":self.credentials.secret.as_str()}),
+            )
+        };
+        self.settings_saving = self.send(path, Some(body));
+    }
     fn settings(&mut self, ui: &mut egui::Ui) {
+        if self.settings_saving {
+            ui.disable();
+        }
         let dirty = self.settings_dirty();
         if self.updating() {
             self.update_card(ui, dirty);
@@ -1432,18 +1500,14 @@ impl Controls {
                 )
                 .clicked()
             {
-                match self.config.validate() {
-                    Ok(()) => {
-                        self.send("/config", Some(serde_json::to_value(&self.config).unwrap()));
-                    }
-                    Err(e) => self.error = e,
-                }
+                self.submit_settings();
             }
             if ui
                 .add_enabled(dirty, egui::Button::new("Discard changes"))
                 .clicked()
             {
-                if let Ok(c) = serde_json::from_value(self.saved_config.clone()) {
+                if let Ok(c) = serde_json::from_value::<config::Config>(self.saved_config.clone()) {
+                    self.credentials.reset(&c.summary);
                     self.config = c;
                 }
             }
@@ -1580,6 +1644,9 @@ impl Controls {
                         ui,
                         "While recording, Daybook reads text on this Mac and discards each frame. Repeated lines keep their first and last observed times. Save Screenshot keeps an original.",
                     );
+                    if ui.link("View captured screen text").clicked() {
+                        self.navigate(5);
+                    }
                 });
                 card(ui, |ui| {
                     ui.heading("Incremental summaries");
@@ -1594,7 +1661,15 @@ impl Controls {
                         "An empty summary model uses local extractive excerpts. Model summaries and consolidation retain references; they never replace original evidence.",
                     );
                 });
-                provider(ui, "Summary provider", &mut self.config.summary, false);
+                if provider(
+                    ui,
+                    "Summary provider",
+                    &mut self.config.summary,
+                    &mut self.credentials,
+                    stopped,
+                ) {
+                    self.submit_settings();
+                }
                 card(ui, |ui| {
                     ui.collapsing("Import a summary provider from OpenCode",|ui|{muted(ui,"JSON/JSONC metadata only. No credentials, OAuth, file/environment expansion or effective-project merging is imported.");ui.add(egui::TextEdit::multiline(&mut self.import).desired_rows(5).desired_width(f32::INFINITY));if ui.button("Import into draft").clicked(){self.send("/import",Some(json!({"jsonc":self.import})));}});
                 });
@@ -1755,7 +1830,10 @@ impl Controls {
         }
     }
     fn settings_dirty(&self) -> bool {
-        self.loaded && serde_json::to_value(&self.config).ok().as_ref() != Some(&self.saved_config)
+        self.loaded
+            && (self.settings_saving
+                || !self.credentials.secret.is_empty()
+                || serde_json::to_value(&self.config).ok().as_ref() != Some(&self.saved_config))
     }
     fn updating(&self) -> bool {
         self.update_pending || self.status["update"]["busy"] == true
@@ -1770,14 +1848,14 @@ impl Controls {
             return;
         }
         let view = json!({"page":self.tab,"settings":self.settings_tab,"health":self.health_tab,
-            "filter":self.filter(),"focus":self.focus,"transcript_range":self.parallel.fixed,"transcript_seconds":self.parallel.seconds,"paragraph_view":self.paragraph_view});
+            "filter":self.filter(),"focus":self.focus,"transcript_range":self.parallel.fixed,"transcript_seconds":self.parallel.seconds,"transcript_ruler":self.parallel.ruler,"paragraph_view":self.paragraph_view});
         if self.send("/update", Some(json!({"draft":self.note,"workspace":view}))) {
             self.error.clear();
             self.update_pending = true;
         }
     }
     fn restore_workspace(&mut self, view: &Value) {
-        let Some(page) = view["page"].as_u64().filter(|p| *p < 5) else {
+        let Some(page) = view["page"].as_u64().filter(|p| *p < 6) else {
             return;
         };
         self.settings_tab = view["settings"].as_u64().unwrap_or(0).min(3) as usize;
@@ -1797,6 +1875,10 @@ impl Controls {
             }
         }
         if page == 0 {
+            self.parallel.ruler =
+                serde_json::from_value::<transcript_range::Span>(view["transcript_ruler"].clone())
+                    .ok()
+                    .filter(|r| r.valid());
             self.paragraph_view = view["paragraph_view"] == true;
             if let Some(seconds) = view["transcript_seconds"].as_i64() {
                 self.parallel.seconds =
@@ -2128,7 +2210,14 @@ fn minutes(ui: &mut egui::Ui, label: &str, seconds: &mut u64, min: f64) {
         }
     });
 }
-fn provider(ui: &mut egui::Ui, title: &str, p: &mut config::Provider, vision: bool) {
+fn provider(
+    ui: &mut egui::Ui,
+    title: &str,
+    p: &mut config::Provider,
+    credentials: &mut credentials::Credentials,
+    stopped: bool,
+) -> bool {
+    let mut save = false;
     card(ui, |ui| {
         ui.heading(title);
         field(ui, "Endpoint", &mut p.endpoint, "http://127.0.0.1:8080/v1");
@@ -2136,23 +2225,13 @@ fn provider(ui: &mut egui::Ui, title: &str, p: &mut config::Provider, vision: bo
             ui,
             "Model name",
             &mut p.model,
-            if vision {
-                "A model that accepts images"
-            } else {
-                "Leave empty for local extractive summaries"
-            },
+            "Leave empty for local extractive summaries",
         );
-        field(
-            ui,
-            "Keychain account reference",
-            &mut p.keychain_account,
-            "Optional; never paste an API key here",
-        );
-        if vision {
-            ui.checkbox(
-                &mut p.supports_images,
-                "I have verified this model accepts images",
-            );
+        credentials.show(ui, p);
+        if !credentials.secret.is_empty() {
+            save = ui
+                .add_enabled(stopped, egui::Button::new("Save key and settings"))
+                .clicked();
         }
         ui.checkbox(
             &mut p.remote_opt_in,
@@ -2161,11 +2240,7 @@ fn provider(ui: &mut egui::Ui, title: &str, p: &mut config::Provider, vision: bo
         if !p.local() {
             ui.colored_label(
                 CORAL,
-                if vision {
-                    "Hosted vision sends selected screen images to this endpoint."
-                } else {
-                    "Hosted summaries send selected evidence text to this endpoint."
-                },
+                "Hosted summaries send selected evidence text to this endpoint.",
             );
         } else {
             muted(
@@ -2174,11 +2249,8 @@ fn provider(ui: &mut egui::Ui, title: &str, p: &mut config::Provider, vision: bo
             );
         }
         ui.collapsing("Optional cost estimate",|ui|{let mut enabled=p.input_usd_per_million.is_some()&&p.output_usd_per_million.is_some();if ui.checkbox(&mut enabled,"Use my supplied USD/token prices").changed(){p.input_usd_per_million=enabled.then_some(0.0);p.output_usd_per_million=enabled.then_some(0.0);}if enabled{ui.horizontal_wrapped(|ui|{ui.label("Input $/million");ui.add(egui::DragValue::new(p.input_usd_per_million.as_mut().unwrap()).range(0.0..=10000.0).speed(0.1));ui.label("Output $/million");ui.add(egui::DragValue::new(p.output_usd_per_million.as_mut().unwrap()).range(0.0..=10000.0).speed(0.1));});}muted(ui,"Enter your actual model rates; 0 means free. Prices are not fetched. Estimates require reported usage and do not represent your invoice, cache discounts or all provider fees.");});
-        muted(
-            ui,
-            "Keychain service: local.daybook.provider. Credentials stay outside config and activity logs.",
-        );
     });
+    save
 }
 impl eframe::App for Controls {
     fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
@@ -2210,7 +2282,12 @@ impl eframe::App for Controls {
                 }
             }
             if self.preview_frames % 10 == 4
-                && (!fixture_api || self.parallel.data.is_some())
+                && (!fixture_api
+                    || if self.tab == 5 {
+                        self.screen_history.ready()
+                    } else {
+                        self.parallel.data.is_some()
+                    })
                 && (!self.preview_motion || self.preview_timing.len() >= 180)
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));

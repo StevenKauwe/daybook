@@ -9,6 +9,55 @@ use std::{
     io::Read,
     time::{Duration, Instant},
 };
+use zeroize::Zeroizing;
+const KEYCHAIN_SERVICE: &str = "local.daybook.provider";
+
+fn checked_key(key: &str) -> Result<&str> {
+    let key = key.trim();
+    if key.is_empty() || key.len() > 8192 || !key.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(
+            "Enter a nonempty API key of up to 8192 printable characters without spaces.".into(),
+        );
+    }
+    Ok(key)
+}
+
+pub fn save_key(account: &str, key: &str) -> Result<()> {
+    if account.is_empty() {
+        return Err("Choose Mac Keychain before saving an API key.".into());
+    }
+    security_framework::passwords::set_generic_password(
+        KEYCHAIN_SERVICE,
+        account,
+        checked_key(key)?.as_bytes(),
+    )
+    .map_err(|_| {
+        "macOS couldn’t save the API key. Unlock your Keychain and allow Daybook to save it.".into()
+    })
+}
+
+fn bearer(p: &Provider) -> Result<Option<Zeroizing<String>>> {
+    let secret = if !p.api_key_env.is_empty() {
+        Zeroizing::new(std::env::var(&p.api_key_env)
+            .map_err(|_| "The API key environment variable is unavailable to Daybook. Check its name and relaunch with it set.")?)
+    } else if !p.keychain_account.is_empty() {
+        let bytes = Zeroizing::new(security_framework::passwords::generic_password(
+            security_framework::passwords::PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, &p.keychain_account))
+            .map_err(|_| "Daybook couldn’t read the API key from Mac Keychain. Check the account and allow access.")?);
+        Zeroizing::new(
+            std::str::from_utf8(&bytes)
+                .map_err(|_| "The Keychain item contains an invalid API key.")?
+                .to_owned(),
+        )
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(Zeroizing::new(format!(
+        "Bearer {}",
+        checked_key(&secret)?
+    ))))
+}
+
 pub fn chat(
     store: &mut Store,
     c: &Config,
@@ -29,6 +78,7 @@ pub fn chat(
     if image.is_some_and(|b| b.len() > 2 * 1024 * 1024) {
         return Err("image exceeds 2 MiB cap".into());
     }
+    let authorization = bearer(p)?;
     // Conservative UTF-8 byte reservation, not a cost estimate. Image tokenization is model-dependent.
     let reserved =
         input.len() as u64 + c.max_output_tokens + if image.is_some() { 8192 } else { 0 } + 512;
@@ -58,22 +108,8 @@ pub fn chat(
             "{}/chat/completions",
             p.endpoint.trim_end_matches('/')
         ));
-        if !p.keychain_account.is_empty() {
-            let output = std::process::Command::new("/usr/bin/security")
-                .args([
-                    "find-generic-password",
-                    "-s",
-                    "local.daybook.provider",
-                    "-a",
-                    &p.keychain_account,
-                    "-w",
-                ])
-                .output()?;
-            if !output.status.success() {
-                return Err("Keychain credential unavailable".into());
-            }
-            let key = String::from_utf8(output.stdout)?;
-            request = request.set("Authorization", &format!("Bearer {}", key.trim()));
+        if let Some(value) = &authorization {
+            request = request.set("Authorization", value);
         }
         // Never surface response bodies or transport errors that may echo credentials/content.
         let response = request

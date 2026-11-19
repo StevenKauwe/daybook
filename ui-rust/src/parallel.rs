@@ -34,10 +34,18 @@ pub(super) struct Detail {
     pub more: bool,
     pub request: Option<Value>,
 }
+#[derive(Clone, Copy)]
+pub(super) enum Gesture {
+    Draw,
+    Move,
+    From,
+    Until,
+}
 pub(super) struct Brush {
     pub original: Span,
     pub anchor: i64,
-    pub edge: u8,
+    pub gesture: Gesture,
+    pub axis: Span,
     pub domain: Arc<Window>,
 }
 pub(super) struct Timeline {
@@ -50,9 +58,8 @@ pub(super) struct Timeline {
     checked: Option<Instant>,
     pub picks: Picks,
     pub marks: std::collections::BTreeMap<i64, (Lane, i64, i64)>,
-    from: String,
-    until: String,
-    editing: bool,
+    pub ruler: Option<Span>,
+    time_fields: [Option<egui::Id>; 2],
     pub drag_start: Option<(i64, usize, egui::Id)>,
     pub detail: Option<Detail>,
     pub clipboard: Option<String>,
@@ -75,9 +82,8 @@ impl Default for Timeline {
             checked: None,
             picks: Default::default(),
             marks: Default::default(),
-            from: String::new(),
-            until: String::new(),
-            editing: false,
+            ruler: None,
+            time_fields: [None; 2],
             drag_start: None,
             detail: None,
             clipboard: None,
@@ -108,22 +114,10 @@ impl Timeline {
         self.marks.clear();
     }
     fn query(&self, passive: bool) -> Value {
-        json!({"range":self.fixed,"seconds":self.seconds,"passive":passive})
-    }
-    fn fields(&mut self, r: Span) {
-        self.day = Some(clock(r.until - 1, "%Y-%m-%d"));
-        let fmt = if clock(r.from, "%F") == clock(r.until, "%F") {
-            "%H:%M:%S"
-        } else {
-            "%F %H:%M:%S"
-        };
-        self.from = clock(r.from, fmt);
-        self.until = clock(r.until, fmt);
+        json!({"range":self.fixed,"seconds":self.seconds,"passive":passive,"overview":self.ruler})
     }
     pub fn apply(&mut self, data: Window) {
-        if !self.editing {
-            self.fields(data.range);
-        }
+        self.day = Some(clock(data.range.until - 1, "%F"));
         if self.overview_drag.is_none() {
             self.held = None;
         }
@@ -135,10 +129,21 @@ impl Timeline {
         }
         self.fixed = Some(r);
         self.seconds = r.len();
-        self.editing = false;
         self.detail = None;
-        self.fields(r);
+        self.day = Some(clock(r.until - 1, "%F"));
         self.receipt.clear();
+    }
+    /// Explicit navigation only pans the ruler if the new selection is outside it.
+    pub fn reveal(&mut self, r: Span) {
+        if let Some(axis) = self
+            .ruler
+            .or_else(|| self.data.as_ref().map(|w| w.overview))
+        {
+            let len = axis.len().max(r.len());
+            let edge = axis.until.clamp(r.until, r.from + len);
+            self.ruler = Some(Span::ending(edge, len));
+        }
+        self.set_range(r);
     }
     pub fn display(&self, passive: bool) -> Option<Arc<Window>> {
         let last = self.data.as_ref()?;
@@ -201,7 +206,6 @@ impl Timeline {
         }))
     }
     pub fn pin(&mut self, r: Span) {
-        self.editing = false;
         if self.fixed.is_none() {
             self.fixed = Some(r);
             self.seconds = r.len();
@@ -489,41 +493,30 @@ impl Controls {
     fn parallel_range(&mut self, ui: &mut egui::Ui, w: &Window) {
         let r = self.parallel.fixed.unwrap_or(w.range);
         ui.horizontal_wrapped(|ui| {
-            let mut submit = false;
-            for start in [true, false] {
-                ui.label(if start { "From" } else { "Until" });
-                let field = if start {
-                    &mut self.parallel.from
-                } else {
-                    &mut self.parallel.until
-                };
-                let width = if field.len() > 9 { 162. } else { 81. };
-                let edit = ui
-                    .add(
-                        egui::TextEdit::singleline(field)
-                            .id(egui::Id::new(("parallel-time-field", start)))
-                            .desired_width(width)
-                            .font(egui::TextStyle::Monospace),
-                    )
-                    .on_hover_text("Local time or YYYY-MM-DD HH:MM:SS");
-                if edit.has_focus() || edit.changed() {
-                    self.parallel.editing = true;
+            let axis = self.parallel.ruler.unwrap_or(w.overview);
+            let fmt = if clock(r.from, "%F") == clock(r.until, "%F") { "%H:%M:%S" } else { "%F %H:%M:%S" };
+            for (i, start) in [true, false].into_iter().enumerate() {
+                let label = if start { "From" } else { "Until" };
+                ui.label(label);
+                let at = if start { r.from } else { r.until };
+                let mut value = at;
+                let bounds = if start { MIN_TIME..=r.until - 1 } else { r.from + 1..=MAX_TIME };
+                let response = ui.push_id(("parallel-clock", start), |ui| {
+                    ui.add(egui::DragValue::new(&mut value)
+                        .range(bounds)
+                        .speed((axis.len() as f64 / 900.).clamp(0.25, 3600.))
+                        .update_while_editing(false)
+                        .custom_formatter(|n, _| clock(n.round() as i64, fmt))
+                        .custom_parser(|s| time_input(s, at).map(|t| t as f64)))
+                }).inner.on_hover_text("Drag left or right to change the time. Hold Shift for finer steps. Click to type.");
+                self.parallel.time_fields[i] = Some(response.id);
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, label));
+                if response.drag_started() || response.clicked() || response.has_focus() {
+                    self.parallel.pin(r);
+                    self.parallel.ruler.get_or_insert(axis);
                 }
-                submit |= edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            }
-            if self.parallel.editing && (ui.small_button("Apply").clicked() || submit) {
-                if let (Some(a), Some(b)) = (
-                    time_input(&self.parallel.from, r.from),
-                    time_input(&self.parallel.until, r.until),
-                ) {
-                    if (Span { from: a, until: b }).valid() {
-                        self.parallel.set_range(Span { from: a, until: b });
-                        self.error.clear();
-                    } else {
-                        self.error = "Until must be later than From.".into();
-                    }
-                } else {
-                    self.error = "Enter a time such as 10:14:00 or a date and time.".into();
+                if response.changed() {
+                    self.parallel.set_range(if start { Span { from: value, ..r } } else { Span { until: value, ..r } });
                 }
             }
             ui.add_space(5.);
@@ -539,7 +532,7 @@ impl Controls {
                     .selectable_label(r.len() == seconds && !["−", "+"].contains(&label), label)
                     .clicked()
                 {
-                    self.parallel.set_range(Span::ending(r.until, seconds));
+                    self.parallel.reveal(Span::ending(r.until, seconds));
                 }
             }
             if ui
@@ -547,7 +540,7 @@ impl Controls {
                 .on_hover_text("Previous time window")
                 .clicked()
             {
-                self.parallel.set_range(Span::ending(r.from, r.len()));
+                self.parallel.reveal(Span::ending(r.from, r.len()));
             }
             if ui
                 .small_button("›")
@@ -555,7 +548,7 @@ impl Controls {
                 .clicked()
             {
                 self.parallel
-                    .set_range(Span::ending(r.until + r.len(), r.len()));
+                    .reveal(Span::ending(r.until + r.len(), r.len()));
             }
             if ui
                 .small_button(if self.parallel.fixed.is_some() {
@@ -567,7 +560,7 @@ impl Controls {
                 .clicked()
             {
                 self.parallel.fixed = None;
-                self.parallel.editing = false;
+                self.parallel.ruler = None;
                 self.parallel.detail = None;
                 self.parallel.clear_picks();
                 self.parallel.checked = None;
@@ -627,9 +620,11 @@ impl Controls {
                 self.copy_parallel(w.range, None, picked);
             }
             let editing_time = ui.memory(|m| {
-                [true, false]
+                self.parallel
+                    .time_fields
                     .iter()
-                    .any(|k| m.has_focus(egui::Id::new(("parallel-time-field", *k))))
+                    .flatten()
+                    .any(|id| m.has_focus(*id))
             });
             if picked
                 && !editing_time
@@ -646,6 +641,9 @@ impl Controls {
             }
             if !self.parallel.receipt.is_empty() {
                 muted(ui, self.parallel.receipt.clone());
+            }
+            if ui.link("Screen text history").clicked() {
+                self.navigate(5);
             }
             if ui.link("Browse archive →").clicked() {
                 self.navigate(1);
@@ -802,7 +800,7 @@ mod tests {
         );
         frame(&ctx, &mut c, vec![press(point(209.), false)]);
         assert!(c.parallel.overview_drag.is_none());
-        assert_eq!(c.parallel.until, clock(from + 209, "%H:%M:%S"));
+        assert_eq!(c.parallel.fixed.unwrap().until, from + 209);
         // A second drag resizes the existing selection using its handle.
         frame(
             &ctx,
@@ -818,6 +816,170 @@ mod tests {
             Some(Span {
                 from: from + 100,
                 until: from + 209
+            })
+        );
+    }
+    fn drag(ctx: &egui::Context, c: &mut Controls, begin: egui::Pos2, end: egui::Pos2) {
+        frame(
+            ctx,
+            c,
+            vec![egui::Event::PointerMoved(begin), press(begin, true)],
+        );
+        frame(ctx, c, vec![egui::Event::PointerMoved(end)]);
+        frame(ctx, c, vec![press(end, false)]);
+    }
+    fn wheel(ctx: &egui::Context, c: &mut Controls, pos: egui::Pos2, amount: f32) {
+        frame(
+            ctx,
+            c,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0., amount),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    #[test]
+    fn a_drag_keeps_its_ruler_after_release_and_replies_and_moves_the_middle_intact() {
+        let (mut c, ctx, _) = setup();
+        for _ in 0..3 {
+            frame(&ctx, &mut c, vec![]);
+        }
+        let domain = c.parallel.data.as_ref().unwrap().clone();
+        let axis = domain.overview;
+        let rect = ctx
+            .read_response(egui::Id::new("parallel-time-ruler"))
+            .unwrap()
+            .rect;
+        let point = |seconds: i64| {
+            egui::pos2(
+                rect.left() + rect.width() * seconds as f32 / axis.len() as f32,
+                rect.center().y,
+            )
+        };
+        drag(&ctx, &mut c, point(30), point(49));
+        let moved = c.parallel.fixed.unwrap();
+        assert_eq!((moved.from, moved.len()), (axis.from + 19, 60));
+        // Grab the handle three pixels off its center. Only the dragged endpoint changes.
+        let offset = egui::vec2(3., 0.);
+        drag(&ctx, &mut c, point(19) + offset, point(29) + offset);
+        assert_eq!(
+            c.parallel.fixed,
+            Some(Span {
+                from: axis.from + 29,
+                until: moved.until
+            })
+        );
+        drag(&ctx, &mut c, point(410), point(270));
+        let selection = Span {
+            from: axis.from + 270,
+            until: axis.from + 410,
+        };
+        assert_eq!(c.parallel.fixed, Some(selection));
+        let request = c.parallel.query(false);
+        assert_eq!(request["overview"], json!(axis));
+        let mut reply = (*domain).clone();
+        reply.range = selection;
+        c.parallel_reply(Reply {
+            path: "/transcript_window".into(),
+            body: Some(request),
+            result: Ok(json!(reply)),
+        });
+        frame(&ctx, &mut c, vec![]);
+        assert_eq!(c.parallel.ruler, Some(axis));
+        assert_eq!(c.parallel.fixed, Some(selection));
+    }
+    #[test]
+    fn wheel_zooms_the_hovered_surface_around_the_cursor() {
+        let (mut c, ctx, _) = setup();
+        for _ in 0..3 {
+            frame(&ctx, &mut c, vec![]);
+        }
+        let w = c.parallel.data.as_ref().unwrap().clone();
+        let rect = ctx
+            .read_response(egui::Id::new("parallel-time-ruler"))
+            .unwrap()
+            .rect;
+        let p = egui::pos2(rect.left() + rect.width() * 0.25, rect.center().y);
+        wheel(&ctx, &mut c, p, 3.);
+        let zoomed = c.parallel.ruler.unwrap();
+        assert!(zoomed.len() < w.overview.len());
+        assert!(
+            (zoomed.from + zoomed.len() / 4 - w.overview.from - w.overview.len() / 4).abs() <= 1
+        );
+        assert_eq!(c.parallel.fixed, Some(w.range));
+        wheel(&ctx, &mut c, p, -3.);
+        assert!((c.parallel.ruler.unwrap().len() - w.overview.len()).abs() <= 1);
+        wheel(&ctx, &mut c, p + egui::vec2(0., 180.), 3.);
+        assert!(c.parallel.fixed.unwrap().len() < w.range.len());
+    }
+    #[test]
+    fn both_clock_fields_scrub_live_and_still_accept_a_typed_time() {
+        let (mut c, ctx, _) = setup();
+        for _ in 0..3 {
+            frame(&ctx, &mut c, vec![]);
+        }
+        let initial = c.parallel.data.as_ref().unwrap().range;
+        let from = ctx
+            .read_response(c.parallel.time_fields[0].unwrap())
+            .unwrap()
+            .rect
+            .center();
+        frame(
+            &ctx,
+            &mut c,
+            vec![egui::Event::PointerMoved(from), press(from, true)],
+        );
+        let right = from + egui::vec2(30., 0.);
+        frame(&ctx, &mut c, vec![egui::Event::PointerMoved(right)]);
+        let moved = c.parallel.fixed.unwrap();
+        assert!(moved.from > initial.from);
+        assert_eq!(moved.until, initial.until);
+        frame(&ctx, &mut c, vec![press(right, false)]);
+        let until = ctx
+            .read_response(c.parallel.time_fields[1].unwrap())
+            .unwrap()
+            .rect
+            .center();
+        drag(&ctx, &mut c, until, until - egui::vec2(15., 0.));
+        let shortened = c.parallel.fixed.unwrap();
+        assert!(shortened.until < moved.until);
+        assert_eq!(shortened.from, moved.from);
+        let until = ctx
+            .read_response(c.parallel.time_fields[1].unwrap())
+            .unwrap()
+            .rect
+            .center();
+        frame(
+            &ctx,
+            &mut c,
+            vec![egui::Event::PointerMoved(until), press(until, true)],
+        );
+        frame(&ctx, &mut c, vec![press(until, false)]);
+        frame(&ctx, &mut c, vec![]);
+        let typed = clock(initial.until + 20, "%H:%M:%S");
+        frame(&ctx, &mut c, vec![egui::Event::Text(typed)]);
+        frame(
+            &ctx,
+            &mut c,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        frame(&ctx, &mut c, vec![]);
+        assert_eq!(
+            c.parallel.fixed,
+            Some(Span {
+                from: moved.from,
+                until: initial.until + 20
             })
         );
     }

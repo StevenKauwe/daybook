@@ -253,6 +253,7 @@ pub(super) fn run(path: std::path::PathBuf, args: &[String]) {
     );
     let passive = enabled("--passive");
     let ten_minutes = enabled("--ten-minutes");
+    let screen_history = enabled("--screen-history");
     let fixture_dir = args
         .iter()
         .position(|s| s == "--fixture-dir")
@@ -287,6 +288,9 @@ pub(super) fn run(path: std::path::PathBuf, args: &[String]) {
         Box::new(move |cc| {
             if let Some(base) = endpoint {
                 let mut c = Controls::new(cc, base);
+                if screen_history {
+                    c.navigate(5);
+                }
                 if ten_minutes {
                     c.parallel.seconds = 600;
                 }

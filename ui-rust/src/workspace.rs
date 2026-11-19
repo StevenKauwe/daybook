@@ -2,12 +2,13 @@
 use super::*;
 use design::{INK, Icon, LINE};
 
-const PAGES: [(Icon, &str); 5] = [
+const PAGES: [(Icon, &str); 6] = [
     (Icon::Live, "Transcript"),
     (Icon::Archive, "Archive"),
     (Icon::Brief, "Daily brief"),
     (Icon::Health, "Diagnostics"),
     (Icon::Settings, "Settings"),
+    (Icon::System, "Screen text"),
 ];
 
 impl Controls {
@@ -25,7 +26,10 @@ impl Controls {
         self.tab = page;
         self.detailed_poll
             .store(page >= 1, std::sync::atomic::Ordering::Relaxed);
-        if page >= 3 {
+        if page == 5 {
+            self.screen_history.checked = None;
+        }
+        if matches!(page, 3 | 4) {
             self.send("/overview", None);
         }
         self.focus = false;
@@ -39,9 +43,16 @@ impl Controls {
     }
     fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
-        for (i, key) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5]
-            .into_iter()
-            .enumerate()
+        for (i, key) in [
+            Key::Num1,
+            Key::Num2,
+            Key::Num3,
+            Key::Num4,
+            Key::Num5,
+            Key::Num6,
+        ]
+        .into_iter()
+        .enumerate()
         {
             if ctx.input_mut(|s| s.consume_key(Modifiers::COMMAND, key)) {
                 self.navigate(i);
@@ -245,7 +256,7 @@ impl Controls {
         ui.add_space(14.);
         design::brand(ui, compact);
         ui.add_space(32.);
-        for index in 0..3 {
+        for index in [0, 1, 5, 2] {
             self.rail_entry(ui, index, compact);
         }
         let artwork = !compact && ui.available_height() > 370.;
@@ -424,6 +435,8 @@ impl Controls {
                     );
                     if self.tab == 1 {
                         self.timeline(ui);
+                    } else if self.tab == 5 {
+                        self.screen_text_page(ui);
                     } else {
                         egui::ScrollArea::vertical()
                             .id_salt((

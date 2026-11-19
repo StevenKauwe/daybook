@@ -27,6 +27,56 @@ fn fraction(t: i64, range: Span) -> f32 {
 fn time_at(f: f32, r: Span) -> i64 {
     r.from + (f.clamp(0., 1.) as f64 * r.len() as f64).round() as i64
 }
+/// Scale about the instant under the pointer. Accumulate small trackpad deltas until
+/// they can move a whole second, including when the user is inspecting a short range.
+fn wheel_range(ui: &egui::Ui, id: egui::Id, span: Span, point: f32) -> Option<Span> {
+    let (amount, now) = ui.input(|input| {
+        let wheel: f64 = input
+            .events
+            .iter()
+            .filter_map(|event| {
+                if let egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                    ..
+                } = event
+                    && !modifiers.command
+                    && !modifiers.ctrl
+                {
+                    let scale = match unit {
+                        egui::MouseWheelUnit::Point => 1.,
+                        egui::MouseWheelUnit::Line => 32.,
+                        egui::MouseWheelUnit::Page => 160.,
+                    };
+                    return Some(delta.y as f64 * scale / 180.);
+                }
+                None
+            })
+            .sum();
+        (wheel + f64::from(input.zoom_delta()).log2(), input.time)
+    });
+    if amount.abs() < 0.00001 {
+        return None;
+    }
+    let carry = ui
+        .data(|d| d.get_temp::<(f64, f64)>(id))
+        .filter(|(time, value)| now - time < 0.35 && value.signum() == amount.signum())
+        .map_or(0., |(_, value)| value);
+    let zoom = (carry + amount).clamp(-8., 8.);
+    let len = (span.len() as f64 * (-zoom).exp2())
+        .round()
+        .clamp(1., (MAX_TIME - MIN_TIME) as f64) as i64;
+    ui.data_mut(|d| d.insert_temp(id, (now, if len == span.len() { zoom } else { 0. })));
+    if len == span.len() {
+        return None;
+    }
+    let point = point.clamp(0., 1.);
+    Some(Span::ending(
+        time_at(point, span) + (f64::from(1. - point) * len as f64).round() as i64,
+        len,
+    ))
+}
 fn source_color(l: Lane, night: bool) -> Color32 {
     match (l, night) {
         (Lane::Mic, false) => Color32::from_rgb(145, 63, 87),
@@ -158,113 +208,163 @@ impl Controls {
             egui::Id::new("parallel-time-ruler"),
             Sense::click_and_drag(),
         );
-        let x = |at: i64| r.left() + fraction(at, w.overview) * r.width();
+        use crate::parallel::{Brush, Gesture};
+        let displayed = self.parallel.fixed.unwrap_or(w.range);
+        let mut axis = self.parallel.ruler.unwrap_or(w.overview);
+        let pointer_fraction = |p: Pos2| ((p.x - r.left()) / r.width().max(1.)).clamp(0., 1.);
+        if response.hovered()
+            && self.parallel.overview_drag.is_none()
+            && let Some(p) = ui.input(|i| i.pointer.hover_pos())
+            && let Some(next) =
+                wheel_range(ui, response.id.with("wheel"), axis, pointer_fraction(p))
+        {
+            self.parallel.pin(displayed);
+            self.parallel.ruler = Some(next);
+            axis = next;
+        }
+        let x = |at: i64| r.left() + fraction(at, axis) * r.width();
+        let on_axis = |at| (axis.from..=axis.until).contains(&at);
         ui.painter().rect_filled(
             r.shrink2(vec2(0., 2.)),
             4.,
             colors.line.gamma_multiply(0.35),
         );
         for band in &w.bands {
+            if band.range.until <= axis.from || band.range.from >= axis.until {
+                continue;
+            }
             let row = match band.lane {
                 Lane::Mic => 0,
                 Lane::Saves => 2,
                 _ => 1,
             };
             let y = r.top() + 5. + row as f32 * 6.;
+            let end = x(band.range.until)
+                .max(x(band.range.from) + 1.)
+                .min(r.right());
             ui.painter().rect_filled(
-                Rect::from_min_max(
-                    pos2(x(band.range.from), y),
-                    pos2(
-                        (x(band.range.until))
-                            .max(x(band.range.from) + 1.)
-                            .min(r.right()),
-                        y + 3.,
-                    ),
-                ),
+                Rect::from_min_max(pos2(x(band.range.from), y), pos2(end, y + 3.)),
                 1.,
                 source_color(band.lane, self.reading.night),
             );
         }
-        let displayed = self.parallel.fixed.unwrap_or(w.range);
-        let at = |p: Pos2| time_at((p.x - r.left()) / r.width().max(1.), w.overview);
-        if response.drag_started()
-            && let Some(p) = ui.input(|i| i.pointer.press_origin())
-        {
-            let mode = if (p.x - x(displayed.from)).abs() < 7. {
-                1
-            } else if (p.x - x(displayed.until)).abs() < 7. {
-                2
-            } else {
-                0
-            };
-            if let Some(domain) = self.parallel.data.clone() {
-                self.parallel.held = Some(domain.clone());
-                self.parallel.overview_drag = Some(crate::parallel::Brush {
-                    original: displayed,
-                    anchor: at(p),
-                    edge: mode,
-                    domain,
-                });
+        let gesture_at = |p: Pos2, shift: bool| {
+            if shift {
+                return Gesture::Draw;
             }
+            let left = (p.x - x(displayed.from)).abs();
+            let right = (p.x - x(displayed.until)).abs();
+            let near_left = on_axis(displayed.from) && left <= 7.;
+            let near_right = on_axis(displayed.until) && right <= 7.;
+            if near_left && (!near_right || left <= right) {
+                Gesture::From
+            } else if near_right {
+                Gesture::Until
+            } else if (displayed.from..displayed.until)
+                .contains(&time_at(pointer_fraction(p), axis))
+            {
+                Gesture::Move
+            } else {
+                Gesture::Draw
+            }
+        };
+        if response.is_pointer_button_down_on()
+            && self.parallel.overview_drag.is_none()
+            && let Some(p) = ui.input(|i| i.pointer.press_origin())
+            && let Some(domain) = self.parallel.data.clone()
+        {
+            self.parallel.pin(displayed);
+            self.parallel.ruler = Some(axis);
+            self.parallel.held = Some(domain.clone());
+            self.parallel.overview_drag = Some(Brush {
+                domain,
+                original: displayed,
+                gesture: gesture_at(p, ui.input(|i| i.modifiers.shift)),
+                anchor: time_at(pointer_fraction(p), axis),
+                axis,
+            });
         }
-        let mut range = self.parallel.fixed.unwrap_or(w.range);
+        let mut range = displayed;
         if let Some(brush) = &self.parallel.overview_drag
             && let Some(p) = response.interact_pointer_pos()
         {
-            let (original, anchor, mode) = (brush.original, brush.anchor, brush.edge);
-            let tip = at(p);
-            range = match mode {
-                1 => Span {
-                    from: tip.min(original.until - 1),
-                    until: original.until,
-                },
-                2 => Span {
-                    from: original.from,
-                    until: tip.max(original.from + 1),
-                },
-                _ => Span {
-                    from: tip.min(anchor),
-                    until: tip.max(anchor).max(anchor.min(tip) + 1),
-                },
-            };
-            if self.parallel.fixed != Some(range) {
+            let tip = time_at(pointer_fraction(p), brush.axis);
+            let delta = tip - brush.anchor;
+            let original = brush.original;
+            if response.dragged() || response.drag_stopped() {
+                range = match brush.gesture {
+                    Gesture::From => Span {
+                        from: (original.from + delta).clamp(MIN_TIME, original.until - 1),
+                        ..original
+                    },
+                    Gesture::Until => Span {
+                        until: (original.until + delta).clamp(original.from + 1, MAX_TIME),
+                        ..original
+                    },
+                    Gesture::Move => {
+                        let d = if original.from >= axis.from && original.until <= axis.until {
+                            delta.clamp(axis.from - original.from, axis.until - original.until)
+                        } else {
+                            delta
+                        };
+                        Span::ending(original.until + d, original.len())
+                    }
+                    Gesture::Draw => {
+                        let from = tip.min(brush.anchor).min(axis.until - 1);
+                        Span {
+                            from,
+                            until: tip.max(brush.anchor).max(from + 1),
+                        }
+                    }
+                };
+            } else if response.clicked() && matches!(brush.gesture, Gesture::Draw) {
+                let end = tip + original.len() / 2;
+                let end = if original.len() <= axis.len() {
+                    end.clamp(axis.from + original.len(), axis.until)
+                } else {
+                    end
+                };
+                range = Span::ending(end, original.len());
+            }
+            if range != displayed {
                 self.parallel.set_range(range);
             }
-            if response.drag_stopped() {
-                self.parallel.overview_drag = None;
-            } else {
-                ui.ctx().request_repaint_after(Duration::from_millis(60));
-            }
-        } else if response.clicked()
-            && let Some(p) = response.interact_pointer_pos()
-        {
-            self.parallel
-                .set_range(Span::ending(at(p) + w.range.len() / 2, w.range.len()));
         }
         if !ui.input(|i| i.pointer.primary_down()) {
             self.parallel.overview_drag = None;
         }
-        let frame = Rect::from_min_max(
-            pos2(x(range.from), r.top() + 2.),
-            pos2(x(range.until).max(x(range.from) + 1.), r.bottom() - 2.),
-        );
-        ui.painter()
-            .rect_stroke(frame, 3., Stroke::new(1.5, colors.mine), StrokeKind::Inside);
-        for px in [frame.left(), frame.right()] {
+        if range.until > axis.from && range.from < axis.until {
+            let frame = Rect::from_min_max(
+                pos2(x(range.from), r.top() + 2.),
+                pos2(x(range.until).max(x(range.from) + 1.), r.bottom() - 2.),
+            );
+            ui.painter()
+                .rect_stroke(frame, 3., Stroke::new(1.5, colors.mine), StrokeKind::Inside);
+        }
+        for time in [range.from, range.until]
+            .into_iter()
+            .filter(|&v| on_axis(v))
+        {
+            let center = pos2(x(time).clamp(r.left() + 2., r.right() - 2.), r.center().y);
             ui.painter().rect_filled(
-                Rect::from_center_size(
-                    pos2(px.clamp(r.left() + 2., r.right() - 2.), r.center().y),
-                    vec2(4., 20.),
-                ),
+                Rect::from_center_size(center, vec2(4., 20.)),
                 2.,
                 colors.mine,
             );
         }
-        response.on_hover_text("Drag to select a time range. Drag either end to adjust it.");
+        let cursor = response
+            .hover_pos()
+            .map(|p| match gesture_at(p, ui.input(|i| i.modifiers.shift)) {
+                Gesture::From | Gesture::Until => egui::CursorIcon::ResizeHorizontal,
+                Gesture::Move => egui::CursorIcon::Grab,
+                Gesture::Draw => egui::CursorIcon::Crosshair,
+            })
+            .unwrap_or_default();
+        response.on_hover_cursor(cursor).on_hover_text("Drag an edge to resize, the middle to move, or empty space to select. Shift-drag selects anywhere. Scroll to zoom the ruler here.");
         let (ticks, _) = ui.allocate_exact_size(vec2(ui.available_width(), 14.), Sense::hover());
-        let fmt = if w.overview.len() > 86400 {
+        let fmt = if axis.len() > 86400 {
             "%b %-d"
-        } else if w.overview.len() > 600 {
+        } else if axis.len() > 600 {
             "%H:%M"
         } else {
             "%H:%M:%S"
@@ -279,7 +379,7 @@ impl Controls {
             ui.painter().text(
                 pos2(ticks.left() + f * ticks.width(), ticks.top()),
                 a,
-                clock(time_at(f, w.overview), fmt),
+                clock(time_at(f, axis), fmt),
                 FontId::proportional(11.),
                 colors.muted,
             );
@@ -561,6 +661,19 @@ impl Controls {
         let col = ((width - gutter) / lanes.len().max(1) as f32).max(28.);
         let y0 = rect.top() + 39.;
         let height = (rect.bottom() - y0 - 19.).max(32.);
+        if ui.rect_contains_pointer(rect)
+            && !ui.input(|i| i.pointer.primary_down())
+            && let Some(p) = ui.input(|i| i.pointer.hover_pos())
+            && let Some(next) = wheel_range(
+                ui,
+                ui.id().with("passage-wheel"),
+                w.range,
+                (p.y - y0) / height,
+            )
+        {
+            self.parallel.reveal(next);
+            ui.ctx().request_repaint();
+        }
         ui.painter().text(
             rect.min + vec2(1., 5.),
             Align2::LEFT_TOP,
@@ -778,25 +891,5 @@ impl Controls {
             }
         }
         self.word_drag(ui, w.range, &hits);
-        let hover = ui
-            .input(|i| i.pointer.hover_pos())
-            .is_some_and(|p| rect.contains(p));
-        if hover {
-            let z = ui.input(|i| i.zoom_delta());
-            if (z - 1.).abs() > 0.001 {
-                let f = ui
-                    .input(|i| i.pointer.hover_pos())
-                    .map(|p| ((p.y - y0) / height).clamp(0., 1.))
-                    .unwrap_or(0.5);
-                let n = (w.range.len() as f64 / z as f64)
-                    .round()
-                    .clamp(1., (MAX_TIME - MIN_TIME) as f64) as i64;
-                let anchor = time_at(f, w.range);
-                self.parallel.set_range(Span::ending(
-                    anchor + ((1. - f) as f64 * n as f64) as i64,
-                    n,
-                ));
-            }
-        }
     }
 }

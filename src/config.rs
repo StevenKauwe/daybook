@@ -8,6 +8,8 @@ pub struct Provider {
     pub remote_opt_in: bool,
     pub supports_images: bool,
     pub keychain_account: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub api_key_env: String,
     pub input_usd_per_million: Option<f64>,
     pub output_usd_per_million: Option<f64>,
 }
@@ -19,6 +21,7 @@ impl Default for Provider {
             remote_opt_in: false,
             supports_images: false,
             keychain_account: String::new(),
+            api_key_env: String::new(),
             input_usd_per_million: None,
             output_usd_per_million: None,
         }
@@ -55,6 +58,22 @@ impl Provider {
             }
         } else if !self.remote_opt_in || u.scheme() != "https" {
             return Err("hosted providers require explicit remote_opt_in and HTTPS; use literal 127.0.0.1 for local".into());
+        }
+        if !self.api_key_env.is_empty() {
+            if !self.keychain_account.is_empty() {
+                return Err("Choose one API key source for this provider.".into());
+            }
+            let mut name = self.api_key_env.bytes();
+            if self.api_key_env.len() > 200
+                || !name
+                    .next()
+                    .is_some_and(|b| b == b'_' || b.is_ascii_alphabetic())
+                || !name.all(|b| b == b'_' || b.is_ascii_alphanumeric())
+            {
+                return Err(
+                    "Enter the environment variable’s name, such as DAYBOOK_API_KEY.".into(),
+                );
+            }
         }
         if self.model.len() > 200 || self.keychain_account.len() > 200 {
             return Err("provider field too long".into());

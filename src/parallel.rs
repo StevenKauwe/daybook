@@ -39,7 +39,7 @@ fn middle(v: &Value) -> &str {
         "system"
     }
 }
-fn range(v: &Value, key: &str) -> Result<Span> {
+fn requested_span(v: &Value, key: &str) -> Result<Span> {
     let s: Span = serde_json::from_value(v[key].clone())?;
     if !s.valid() {
         return Err("Choose a valid time range".into());
@@ -174,19 +174,23 @@ pub fn window(s: &Store, v: &Value) -> Result<Value> {
         };
         Span::ending(end, seconds)
     } else {
-        range(v, "range")?
+        requested_span(v, "range")?
     };
-    let overview_len = (range.len().saturating_mul(10))
-        .max(600)
-        .min(extent.len().max(range.len()));
-    let left = range
-        .from
-        .saturating_sub((overview_len - range.len()) / 2)
-        .max(extent.from.min(range.from));
-    let end = (left + overview_len)
-        .min(extent.until.max(range.until))
-        .max(range.until);
-    let overview = Span::ending(end, overview_len);
+    let overview = if !v["overview"].is_null() {
+        requested_span(v, "overview")?
+    } else {
+        let overview_len = (range.len().saturating_mul(10))
+            .max(600)
+            .min(extent.len().max(range.len()));
+        let left = range
+            .from
+            .saturating_sub((overview_len - range.len()) / 2)
+            .max(extent.from.min(range.from));
+        let end = (left + overview_len)
+            .min(extent.until.max(range.until))
+            .max(range.until);
+        Span::ending(end, overview_len)
+    };
     let (passages, dense) = read_window(s, range, mid, false)?;
     let clusters = if dense {
         bins(s, range, mid, 64, false)?
@@ -212,8 +216,8 @@ pub fn window(s: &Store, v: &Value) -> Result<Value> {
     Ok(serde_json::to_value(window)?)
 }
 pub fn passages(s: &Store, v: &Value) -> Result<Value> {
-    let r = range(v, "range")?;
-    let b = range(v, "bucket")?;
+    let r = requested_span(v, "range")?;
+    let b = requested_span(v, "bucket")?;
     let lane: Lane = serde_json::from_value(v["lane"].clone())?;
     let sql = scope()
         + "SELECT "
@@ -242,7 +246,7 @@ pub fn passages(s: &Store, v: &Value) -> Result<Value> {
     Ok(json!({"items":items,"more":more}))
 }
 pub fn copy(s: &Store, v: &Value) -> Result<Value> {
-    let r = range(v, "range")?;
+    let r = requested_span(v, "range")?;
     let selected = v["selected"] == true;
     let picks: Picks =
         serde_json::from_value(v.get("picks").cloned().unwrap_or_else(|| json!({})))?;

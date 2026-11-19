@@ -44,6 +44,9 @@ with tempfile.TemporaryDirectory(prefix="daybook-parallel-api-") as directory:
             (-438,-430,"transcript","remote","We have time for another print proof."),
             (-408,-408,"note","clipboard","Ferry tickets · $125"),
             (-362,-356,"transcript","me","Keep the original cover in the studio."),
+            (-335,-302,"screen","passive_screen","Proof corrections"),
+            (-335,-286,"screen","passive_screen","Increase the title clearance to 4 mm"),
+            (-201,-185,"screen","passive_screen","Thread samples · forest green"),
             (-303,-296,"transcript","remote","Saturday is the last press check."),
             (-260,-260,"note","clipboard","Proof deadline · Friday"),
             (-212,-206,"transcript","me","Ask the printer about the green thread."),
@@ -78,11 +81,18 @@ with tempfile.TemporaryDirectory(prefix="daybook-parallel-api-") as directory:
         assert any(p["source"]=="passive_screen" and p["end"]>p["at"] for p in mode["passages"])
         broad = call("/transcript_window", {"seconds":600})
         copy = call("/copy_transcript", {"range":broad["range"]})
-        assert copy["count"]==len(events)-1 and "$125" in copy["text"]
+        assert copy["count"]==sum(e[3] != "passive_screen" for e in events) and "$125" in copy["text"]
         print("PASS stopped launch, ordinary native window contract, local source switching, image provenance and complete copy", flush=True)
+        axis = {"from":first-300, "until":first+300}
+        fixed = call("/transcript_window", {"range":{"from":first+10, "until":first+27},"overview":axis})
+        assert fixed["overview"] == axis and fixed["range"] == {"from":first+10,"until":first+27}
+        visits = call("/screen_text", {})["items"]
+        assert len(visits)==4 and all(v["end"] > v["at"] for v in visits)
+        assert [v["text"] for v in call("/screen_text", {"query":"TITLE CLEARANCE"})["items"]] == ["Increase the title clearance to 4 mm"]
+        print("PASS pinned overview and searchable automatic screen visits with first/last sightings", flush=True)
         if args.snapshot_dir:
             args.snapshot_dir.mkdir(parents=True, exist_ok=True)
-            for name, flags in [("daybook-native-parallel.png",[]),("daybook-native-ten-minutes.png",["--ten-minutes"])]:
+            for name, flags in [("daybook-native-parallel.png",[]),("daybook-native-ten-minutes.png",["--ten-minutes"]),("daybook-native-screen-text.png",["--screen-history"])]:
                 out = args.snapshot_dir / name
                 subprocess.run([controls,"--design-preview",out,"--fixture-dir",root,*flags],check=True,timeout=50,stdout=subprocess.DEVNULL)
                 assert out.stat().st_size>30_000

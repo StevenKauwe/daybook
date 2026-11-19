@@ -844,7 +844,7 @@ mod tests {
         );
     }
     #[test]
-    fn a_drag_keeps_its_ruler_after_release_and_replies_and_moves_the_middle_intact() {
+    fn moving_by_the_grip_preserves_duration_and_the_ruler_survives_release_and_replies() {
         let (mut c, ctx, _) = setup();
         for _ in 0..3 {
             frame(&ctx, &mut c, vec![]);
@@ -861,7 +861,8 @@ mod tests {
                 rect.center().y,
             )
         };
-        drag(&ctx, &mut c, point(30), point(49));
+        let grip = |t| egui::pos2(point(t).x, rect.bottom() - 6.);
+        drag(&ctx, &mut c, grip(30), grip(49));
         let moved = c.parallel.fixed.unwrap();
         assert_eq!((moved.from, moved.len()), (axis.from + 19, 60));
         // Grab the handle three pixels off its center. Only the dragged endpoint changes.
@@ -916,6 +917,155 @@ mod tests {
         assert!((c.parallel.ruler.unwrap().len() - w.overview.len()).abs() <= 1);
         wheel(&ctx, &mut c, p + egui::vec2(0., 180.), 3.);
         assert!(c.parallel.fixed.unwrap().len() < w.range.len());
+    }
+    // Start with a ten-minute selection, then use the real wheel gesture to bring
+    // both endpoints outside the visible ruler, as in a zoomed-in recording.
+    fn zoom_inside_selection() -> (Controls, egui::Context, egui::Rect, Span, Span) {
+        let (mut c, ctx, _) = setup();
+        let whole = c.parallel.data.as_ref().unwrap().overview;
+        c.parallel.set_range(whole);
+        for _ in 0..3 {
+            frame(&ctx, &mut c, vec![]);
+        }
+        let rect = ctx
+            .read_response(egui::Id::new("parallel-time-ruler"))
+            .unwrap()
+            .rect;
+        wheel(&ctx, &mut c, rect.center(), 6.);
+        let axis = c.parallel.ruler.unwrap();
+        assert!(whole.from < axis.from && axis.until < whole.until);
+        (c, ctx, rect, whole, axis)
+    }
+    #[test]
+    fn zoomed_ruler_can_draw_a_subsection_while_both_ends_are_out_of_view() {
+        let (mut c, ctx, rect, _, axis) = zoom_inside_selection();
+        let point = |t: i64| {
+            egui::pos2(
+                rect.left() + rect.width() * (t - axis.from) as f32 / axis.len() as f32,
+                rect.center().y,
+            )
+        };
+        let a = axis.from + axis.len() / 4;
+        let b = axis.until - axis.len() / 4;
+        frame(
+            &ctx,
+            &mut c,
+            vec![egui::Event::PointerMoved(point(b)), press(point(b), true)],
+        );
+        frame(&ctx, &mut c, vec![egui::Event::PointerMoved(point(a))]);
+        assert_eq!(
+            c.parallel.fixed,
+            Some(Span { from: a, until: b }),
+            "a plain reverse drag selects inside the previous selection before release"
+        );
+        frame(&ctx, &mut c, vec![press(point(a), false)]);
+        assert_eq!(c.parallel.ruler, Some(axis));
+        // Repeat inside a now fully visible selection and leave the axis stationary.
+        drag(&ctx, &mut c, point(a + 10), point(b - 10));
+        assert_eq!(
+            c.parallel.fixed,
+            Some(Span {
+                from: a + 10,
+                until: b - 10
+            })
+        );
+        frame(
+            &ctx,
+            &mut c,
+            vec![
+                egui::Event::PointerMoved(point(a + 20)),
+                press(point(a + 20), true),
+            ],
+        );
+        frame(&ctx, &mut c, vec![press(point(a + 20), false)]);
+        assert_eq!(
+            c.parallel.fixed,
+            Some(Span {
+                from: a + 10,
+                until: b - 10
+            }),
+            "a click inside keeps the range"
+        );
+        assert_eq!(c.parallel.ruler, Some(axis));
+    }
+    #[test]
+    fn zoomed_ruler_border_handles_bring_each_endpoint_to_the_pointer() {
+        let (mut c, ctx, rect, whole, axis) = zoom_inside_selection();
+        let left = egui::pos2(rect.left() + 4., rect.center().y);
+        let right = egui::pos2(rect.right() - 4., rect.center().y);
+        let t1 = axis.from + axis.len() / 4;
+        let t2 = axis.until - axis.len() / 4;
+        let point = |t| {
+            egui::pos2(
+                rect.left() + rect.width() * (t - axis.from) as f32 / axis.len() as f32,
+                rect.center().y,
+            )
+        };
+        frame(
+            &ctx,
+            &mut c,
+            vec![egui::Event::PointerMoved(left), press(left, true)],
+        );
+        frame(&ctx, &mut c, vec![press(left, false)]);
+        assert_eq!(
+            c.parallel.fixed,
+            Some(whole),
+            "a click on a clipped handle leaves the actual time intact"
+        );
+        drag(&ctx, &mut c, left, point(t1));
+        assert_eq!(
+            c.parallel.fixed,
+            Some(Span {
+                from: t1,
+                until: whole.until
+            })
+        );
+        drag(&ctx, &mut c, right, point(t2));
+        assert_eq!(
+            c.parallel.fixed,
+            Some(Span {
+                from: t1,
+                until: t2
+            })
+        );
+        assert_eq!(c.parallel.ruler, Some(axis));
+    }
+    #[test]
+    fn a_selection_entirely_outside_the_ruler_can_be_revealed_or_resized() {
+        let (mut c, ctx, rect, _, axis) = zoom_inside_selection();
+        let before = Span {
+            from: axis.from - 60,
+            until: axis.from - 30,
+        };
+        c.parallel.set_range(before);
+        let left = egui::pos2(rect.left() + 4., rect.center().y);
+        frame(
+            &ctx,
+            &mut c,
+            vec![egui::Event::PointerMoved(left), press(left, true)],
+        );
+        frame(&ctx, &mut c, vec![press(left, false)]);
+        let revealed = c.parallel.ruler.unwrap();
+        assert!(revealed.from <= before.from && before.until <= revealed.until);
+        assert_eq!(c.parallel.fixed, Some(before));
+        assert_eq!(revealed.len(), axis.len());
+
+        let after = Span {
+            from: axis.until + 30,
+            until: axis.until + 60,
+        };
+        c.parallel.ruler = Some(axis);
+        c.parallel.set_range(after);
+        let right = egui::pos2(rect.right() - 4., rect.center().y);
+        drag(&ctx, &mut c, right, rect.center());
+        assert_eq!(
+            c.parallel.fixed,
+            Some(Span {
+                from: axis.from + (axis.len() + 1) / 2,
+                until: after.until,
+            })
+        );
+        assert_eq!(c.parallel.ruler, Some(axis));
     }
     #[test]
     fn both_clock_fields_scrub_live_and_still_accept_a_typed_time() {

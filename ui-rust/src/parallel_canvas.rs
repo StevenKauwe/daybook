@@ -1,6 +1,9 @@
 //! The same vertical coordinate represents the same instant in every source column.
 use super::*;
-use crate::{parallel::clock, transcript_range::*};
+use crate::{
+    parallel::{Brush, Gesture, clock},
+    transcript_range::*,
+};
 use egui::{Align2, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use std::sync::Arc;
 
@@ -26,6 +29,110 @@ fn fraction(t: i64, range: Span) -> f32 {
 }
 fn time_at(f: f32, r: Span) -> i64 {
     r.from + (f.clamp(0., 1.) as f64 * r.len() as f64).round() as i64
+}
+// The same rectangles drive painting and hit testing, including handles pinned to
+// the viewport border while their actual times are outside the visible ruler.
+struct RulerHandles {
+    outline: Option<Rect>,
+    from: Option<Rect>,
+    until: Option<Rect>,
+    mover: Option<Rect>,
+}
+impl RulerHandles {
+    fn new(track: Rect, axis: Span, range: Span) -> Self {
+        let x = |time| track.left() + fraction(time, axis) * track.width();
+        let width = 10.0_f32.min(track.width());
+        let grip = |time| {
+            let min = track.left() + width / 2.;
+            let max = (track.right() - width / 2.).max(min);
+            let center = pos2(x(time).clamp(min, max), track.center().y);
+            Rect::from_center_size(center, vec2(width, 20.))
+        };
+        // When the entire selection is before or after the viewport, its nearest
+        // endpoint can still be pulled back into view.
+        let mut from = (range.until > axis.from).then(|| grip(range.from));
+        let mut until = (range.from < axis.until).then(|| grip(range.until));
+        if let (Some(a), Some(b)) = (&mut from, &mut until)
+            && a.right() > b.left()
+            && track.width() >= 2. * width
+        {
+            let middle = ((a.center().x + b.center().x) / 2.)
+                .clamp(track.left() + width, track.right() - width);
+            *a = a.translate(vec2(middle - a.right(), 0.));
+            *b = b.translate(vec2(middle - b.left(), 0.));
+        }
+        let outline = (range.until > axis.from && range.from < axis.until).then(|| {
+            let left = x(range.from).min((track.right() - 1.).max(track.left()));
+            Rect::from_min_max(
+                pos2(left, track.top() + 2.),
+                pos2(
+                    x(range.until).max(left + 1.).min(track.right()),
+                    track.bottom() - 2.,
+                ),
+            )
+        });
+        let mover = outline
+            .filter(|r| r.width() >= 56.)
+            .map(|r| Rect::from_center_size(pos2(r.center().x, r.bottom() - 4.), vec2(26., 8.)));
+        Self {
+            outline,
+            from,
+            until,
+            mover,
+        }
+    }
+    fn gesture(&self, p: Pos2, modifiers: egui::Modifiers) -> Gesture {
+        if modifiers.shift {
+            return Gesture::Draw;
+        }
+        if modifiers.alt && self.outline.is_some_and(|r| r.contains(p)) {
+            return Gesture::Move;
+        }
+        let distance = |grip: Option<Rect>| {
+            grip.filter(|r| r.expand(4.).contains(p))
+                .map_or(f32::INFINITY, |r| (r.center().x - p.x).abs())
+        };
+        let from = distance(self.from);
+        let until = distance(self.until);
+        if from.is_finite() && from <= until {
+            return Gesture::From;
+        }
+        if until.is_finite() {
+            return Gesture::Until;
+        }
+        if self
+            .mover
+            .is_some_and(|r| r.expand2(vec2(3., 1.5)).contains(p))
+        {
+            return Gesture::Move;
+        }
+        Gesture::Draw
+    }
+    fn paint(&self, painter: &egui::Painter, colors: design::Paper, range: Span, axis: Span) {
+        if let Some(rect) = self.outline {
+            painter.rect_stroke(rect, 3., Stroke::new(1.5, colors.mine), StrokeKind::Inside);
+        }
+        let mark = Stroke::new(1.4, colors.sheet);
+        for (handle, time) in [(self.from, range.from), (self.until, range.until)] {
+            let Some(rect) = handle else { continue };
+            let center = rect.center();
+            painter.rect_filled(rect, 3., colors.mine);
+            if self.outline.is_none() || !(axis.from..=axis.until).contains(&time) {
+                let dir = if time <= axis.from { -1. } else { 1. };
+                let tip = center + vec2(2. * dir, 0.);
+                painter.line_segment([center + vec2(-1.5 * dir, -3.), tip], mark);
+                painter.line_segment([tip, center + vec2(-1.5 * dir, 3.)], mark);
+            } else {
+                painter.line_segment([center - vec2(0., 3.5), center + vec2(0., 3.5)], mark);
+            }
+        }
+        if let Some(grip) = self.mover {
+            painter.rect_filled(grip, 4., colors.mine);
+            for x in [-5., 0., 5.] {
+                painter.circle_filled(grip.center() + vec2(x, 0.), 1., colors.sheet);
+            }
+        }
+    }
 }
 /// Scale about the instant under the pointer. Accumulate small trackpad deltas until
 /// they can move a whole second, including when the user is inspecting a short range.
@@ -208,7 +315,6 @@ impl Controls {
             egui::Id::new("parallel-time-ruler"),
             Sense::click_and_drag(),
         );
-        use crate::parallel::{Brush, Gesture};
         let displayed = self.parallel.fixed.unwrap_or(w.range);
         let mut axis = self.parallel.ruler.unwrap_or(w.overview);
         let pointer_fraction = |p: Pos2| ((p.x - r.left()) / r.width().max(1.)).clamp(0., 1.);
@@ -223,7 +329,6 @@ impl Controls {
             axis = next;
         }
         let x = |at: i64| r.left() + fraction(at, axis) * r.width();
-        let on_axis = |at| (axis.from..=axis.until).contains(&at);
         ui.painter().rect_filled(
             r.shrink2(vec2(0., 2.)),
             4.,
@@ -248,26 +353,7 @@ impl Controls {
                 source_color(band.lane, self.reading.night),
             );
         }
-        let gesture_at = |p: Pos2, shift: bool| {
-            if shift {
-                return Gesture::Draw;
-            }
-            let left = (p.x - x(displayed.from)).abs();
-            let right = (p.x - x(displayed.until)).abs();
-            let near_left = on_axis(displayed.from) && left <= 7.;
-            let near_right = on_axis(displayed.until) && right <= 7.;
-            if near_left && (!near_right || left <= right) {
-                Gesture::From
-            } else if near_right {
-                Gesture::Until
-            } else if (displayed.from..displayed.until)
-                .contains(&time_at(pointer_fraction(p), axis))
-            {
-                Gesture::Move
-            } else {
-                Gesture::Draw
-            }
-        };
+        let handles = RulerHandles::new(r, axis, displayed);
         if response.is_pointer_button_down_on()
             && self.parallel.overview_drag.is_none()
             && let Some(p) = ui.input(|i| i.pointer.press_origin())
@@ -279,7 +365,7 @@ impl Controls {
             self.parallel.overview_drag = Some(Brush {
                 domain,
                 original: displayed,
-                gesture: gesture_at(p, ui.input(|i| i.modifiers.shift)),
+                gesture: handles.gesture(p, ui.input(|i| i.modifiers)),
                 anchor: time_at(pointer_fraction(p), axis),
                 axis,
             });
@@ -292,13 +378,22 @@ impl Controls {
             let delta = tip - brush.anchor;
             let original = brush.original;
             if response.dragged() || response.drag_stopped() {
+                // A visible handle keeps the original grab offset. Pulling an offscreen
+                // endpoint inward sets it directly to the time under the pointer.
+                let dragged_time = |time| {
+                    if (brush.axis.from..=brush.axis.until).contains(&time) {
+                        time + delta
+                    } else {
+                        tip
+                    }
+                };
                 range = match brush.gesture {
                     Gesture::From => Span {
-                        from: (original.from + delta).clamp(MIN_TIME, original.until - 1),
+                        from: dragged_time(original.from).clamp(MIN_TIME, original.until - 1),
                         ..original
                     },
                     Gesture::Until => Span {
-                        until: (original.until + delta).clamp(original.from + 1, MAX_TIME),
+                        until: dragged_time(original.until).clamp(original.from + 1, MAX_TIME),
                         ..original
                     },
                     Gesture::Move => {
@@ -317,7 +412,15 @@ impl Controls {
                         }
                     }
                 };
-            } else if response.clicked() && matches!(brush.gesture, Gesture::Draw) {
+            } else if response.clicked()
+                && matches!(brush.gesture, Gesture::From | Gesture::Until)
+                && (original.until <= axis.from || original.from >= axis.until)
+            {
+                self.parallel.reveal(original);
+            } else if response.clicked()
+                && matches!(brush.gesture, Gesture::Draw)
+                && !(original.from..=original.until).contains(&tip)
+            {
                 let end = tip + original.len() / 2;
                 let end = if original.len() <= axis.len() {
                     end.clamp(axis.from + original.len(), axis.until)
@@ -333,34 +436,49 @@ impl Controls {
         if !ui.input(|i| i.pointer.primary_down()) {
             self.parallel.overview_drag = None;
         }
-        if range.until > axis.from && range.from < axis.until {
-            let frame = Rect::from_min_max(
-                pos2(x(range.from), r.top() + 2.),
-                pos2(x(range.until).max(x(range.from) + 1.), r.bottom() - 2.),
-            );
-            ui.painter()
-                .rect_stroke(frame, 3., Stroke::new(1.5, colors.mine), StrokeKind::Inside);
-        }
-        for time in [range.from, range.until]
-            .into_iter()
-            .filter(|&v| on_axis(v))
-        {
-            let center = pos2(x(time).clamp(r.left() + 2., r.right() - 2.), r.center().y);
-            ui.painter().rect_filled(
-                Rect::from_center_size(center, vec2(4., 20.)),
-                2.,
-                colors.mine,
-            );
-        }
-        let cursor = response
-            .hover_pos()
-            .map(|p| match gesture_at(p, ui.input(|i| i.modifiers.shift)) {
-                Gesture::From | Gesture::Until => egui::CursorIcon::ResizeHorizontal,
-                Gesture::Move => egui::CursorIcon::Grab,
-                Gesture::Draw => egui::CursorIcon::Crosshair,
-            })
-            .unwrap_or_default();
-        response.on_hover_cursor(cursor).on_hover_text("Drag an edge to resize, the middle to move, or empty space to select. Shift-drag selects anywhere. Scroll to zoom the ruler here.");
+        let handles = if range == displayed {
+            handles
+        } else {
+            RulerHandles::new(r, axis, range)
+        };
+        handles.paint(ui.painter(), colors, range, axis);
+        let dragging = self
+            .parallel
+            .overview_drag
+            .as_ref()
+            .map(|brush| brush.gesture);
+        let gesture = dragging.or_else(|| {
+            response
+                .hover_pos()
+                .map(|p| handles.gesture(p, ui.input(|i| i.modifiers)))
+        });
+        let (cursor, help) = match gesture {
+            Some(Gesture::From | Gesture::Until) if handles.outline.is_none() => (
+                egui::CursorIcon::ResizeHorizontal,
+                "The selection is outside this view. Click to show it, or drag this edge here.",
+            ),
+            Some(Gesture::From) => (
+                egui::CursorIcon::ResizeHorizontal,
+                "Drag to set the start of the selection.",
+            ),
+            Some(Gesture::Until) => (
+                egui::CursorIcon::ResizeHorizontal,
+                "Drag to set the end of the selection.",
+            ),
+            Some(Gesture::Move) => (
+                if dragging.is_some() {
+                    egui::CursorIcon::Grabbing
+                } else {
+                    egui::CursorIcon::Grab
+                },
+                "Drag to move the whole selection.",
+            ),
+            _ => (
+                egui::CursorIcon::Crosshair,
+                "Drag across the ruler to select a time range. Drag the dotted grip to move it. Scroll to zoom.",
+            ),
+        };
+        response.on_hover_cursor(cursor).on_hover_text(help);
         let (ticks, _) = ui.allocate_exact_size(vec2(ui.available_width(), 14.), Sense::hover());
         let fmt = if axis.len() > 86400 {
             "%b %-d"

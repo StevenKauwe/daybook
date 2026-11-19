@@ -145,7 +145,11 @@ The in-app updater builds offline using one Cargo job and the saved stable signi
 
 ## Using the transcript
 
-Daybook opens on a **Parallel transcript**. Microphone speech, system audio or passive screen text, and saved items share a clock. Only columns with content in the selected range appear. Drag empty space on the ruler to select a range, either edge to resize it, or the highlighted middle to move it. Shift-drag selects a fresh range anywhere. The ruler stays put after release. Scroll over the ruler to zoom its scale around the pointer, or over the transcript to zoom the passages. Drag **From** or **Until** left or right, or click either clock to type a time. Choose **10 min** or keep zooming out with **−**. As passages shrink, a name, topic or value from the original stays readable. Click it to read the passages at that time. Hover a saved screenshot or pasted-image icon to see the original, or click to open it.
+Daybook opens on a **Parallel transcript**. Microphone speech, system audio or passive screen text, and saved items share a clock. Only columns with content in the selected range appear.
+
+Drag across the ruler to select a time range. You can drag inside the current selection to pick a smaller part. Pull either handle to resize. When an endpoint is outside the view, its handle stays at the border and shows an arrow. Drag the dotted grip or Option-drag the highlight to move the whole selection. The ruler stays put after release. Scroll over the ruler to zoom around the pointer, or over the transcript to zoom the passages. Drag **From** or **Until** left or right, or click either clock to type a time.
+
+Choose **10 min** or keep zooming out with **−**. As passages shrink, a name, topic or value from the original stays readable. Click it to read the passages at that time. Hover a saved screenshot or pasted-image icon to see the original, or click to open it.
 
 Drag across words, click a passage, or click a heading to select that column. **Copy selected** uses those selections. **Copy conversation** includes every passage from the displayed sources and time range, including folded passages, in timestamp order. **Inputs** shows the microphone and system level meters. **Stop recording** disarms the recorder and leaves your words available.
 

@@ -36,18 +36,18 @@ try {
 <section id="daybook-columns" aria-label="Daybook parallel transcript">
   <header class="pt-title">
     <div><span class="pt-brand">Daybook</span><h2>Parallel transcript</h2></div>
-    <div class="pt-actions"><span class="pt-sample">Sample recording · 10:14–10:24</span><button type="button" class="pt-quiet" data-pick aria-pressed="false" hidden>☆ Shortlist</button></div>
+    <div class="pt-actions"><label class="pt-sample">Sample <select data-sample aria-label="Sample recording"><option value="steady" selected>60 words/min</option><option value="pauses">Conversation with pauses</option></select></label><button type="button" class="pt-quiet" data-pick aria-pressed="false" hidden>☆ Shortlist</button></div>
   </header>
   <section class="pt-range" aria-label="Time window">
     <div class="pt-tools">
-      <div class="pt-fields"><label>From <input data-from type="text" value="10:14:00" aria-label="Range start"></label><span aria-hidden="true">→</span><label>Until <input data-until type="text" value="10:14:30" aria-label="Range end"></label></div>
-      <div class="pt-zooms" role="group" aria-label="Time shown"><button type="button" data-zoom="out" aria-label="Zoom out">−</button><button type="button" data-seconds="30" aria-pressed="true">30 sec</button><button type="button" data-seconds="60" aria-pressed="false">1 min</button><button type="button" data-seconds="300" aria-pressed="false">5 min</button><button type="button" data-seconds="600" aria-pressed="false">10 min</button><button type="button" data-zoom="in" aria-label="Zoom in">+</button></div>
+      <div class="pt-fields"><label>From <input data-from type="text" value="10:14:00" aria-label="Range start"></label><span aria-hidden="true">→</span><label>Until <input data-until type="text" value="10:15:00" aria-label="Range end"></label></div>
+      <div class="pt-zooms" role="group" aria-label="Time shown"><button type="button" data-zoom="out" aria-label="Zoom out">−</button><button type="button" data-seconds="30" aria-pressed="false">30 sec</button><button type="button" data-seconds="60" aria-pressed="true">1 min</button><button type="button" data-seconds="300" aria-pressed="false">5 min</button><button type="button" data-seconds="600" aria-pressed="false">10 min</button><button type="button" data-zoom="in" aria-label="Zoom in">+</button></div>
     </div>
     <div class="pt-ruler">
       <div class="pt-bands" aria-hidden="true"></div>
       <div class="pt-window" aria-hidden="true"></div>
       <input class="pt-handle" data-grip="from" aria-label="Start of selected range" type="range" min="0" max="600" step="1" value="0">
-      <input class="pt-handle" data-grip="until" aria-label="End of selected range" type="range" min="0" max="600" step="1" value="30">
+      <input class="pt-handle" data-grip="until" aria-label="End of selected range" type="range" min="0" max="600" step="1" value="60">
     </div>
     <div class="pt-ticks" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
     <output class="pt-extent" aria-live="polite"></output>
@@ -66,7 +66,7 @@ try {
       <button type="button" class="pt-quiet" data-clear hidden>Clear selection</button>
       <button type="button" class="pt-quiet" data-preview-toggle aria-expanded="false">Preview copy</button>
     </div>
-    <p class="pt-help">Drag the time window above. Select passages or highlight words in any column.</p>
+    <p class="pt-help">Click a passage to select it, or drag across words.</p>
     <output class="pt-receipt" aria-live="polite"></output>
     <div class="pt-copy-preview" hidden><label><span data-preview-label>Conversation</span><textarea rows="5" readonly aria-label="Conversation copy preview" spellcheck="false"></textarea></label></div>
   </footer>
@@ -76,7 +76,7 @@ try {
   </aside>
 </section>
 <style>
-#daybook-columns {color-scheme:light dark;--pt-paper:light-dark(#fffdf8,#202420);--pt-soft:light-dark(#f6f5ed,#292d28);--pt-ink:light-dark(#253329,#e8ede4);--pt-dim:light-dark(#59665b,#adb9ae);--pt-edge:light-dark(#d8ded1,#49534a);--pt-tick:light-dark(#e9ebdf,#343c34);--pt-focus:light-dark(#355f48,#a4c5aa);--pt-action:light-dark(#264b39,#bbd9bb);--pt-action-ink:light-dark(#fffdf7,#172b1c);--pt-mic:light-dark(#90465c,#efadbd);--pt-sys:light-dark(#50578e,#bbc4fb);--pt-save:light-dark(#3e704b,#acd8ad);color:var(--pt-ink);background:var(--pt-paper);border:1px solid var(--pt-edge);border-radius:15px;position:relative;isolation:isolate;container-type:inline-size;font:15px/1.45 "Inter",-apple-system,BlinkMacSystemFont,sans-serif}
+#daybook-columns {color-scheme:light dark;--pt-paper:light-dark(#fffdf8,#202420);--pt-soft:light-dark(#f6f5ed,#292d28);--pt-ink:light-dark(#253329,#e8ede4);--pt-dim:light-dark(#59665b,#adb9ae);--pt-edge:light-dark(#d8ded1,#49534a);--pt-focus:light-dark(#355f48,#a4c5aa);--pt-action:light-dark(#264b39,#bbd9bb);--pt-action-ink:light-dark(#fffdf7,#172b1c);--pt-mic:light-dark(#90465c,#efadbd);--pt-sys:light-dark(#50578e,#bbc4fb);--pt-save:light-dark(#3e704b,#acd8ad);color:var(--pt-ink);background:var(--pt-paper);border:1px solid var(--pt-edge);border-radius:15px;position:relative;isolation:isolate;container-type:inline-size;font:15px/1.45 "Inter",-apple-system,BlinkMacSystemFont,sans-serif}
 #daybook-columns * {box-sizing:border-box}
 #daybook-columns [hidden] {display:none!important}
 #daybook-columns h2,#daybook-columns h3,#daybook-columns p,#daybook-columns blockquote {margin:0}
@@ -89,8 +89,9 @@ try {
 #daybook-columns .pt-title {padding:17px 24px 13px;justify-content:space-between;border-bottom:1px solid var(--pt-edge)}
 #daybook-columns .pt-brand {display:block;font:500 15px Georgia,serif;color:var(--pt-focus);margin-bottom:2px}
 #daybook-columns h2 {font:normal 29px/1.2 Georgia,serif;letter-spacing:-.7px}
-#daybook-columns .pt-sample,#daybook-columns .pt-ticks,#daybook-columns .pt-stamp,#daybook-columns .pt-clock-label,#daybook-columns .pt-help,#daybook-columns .pt-origin-note {font:normal 12px/1.45 "Inter",-apple-system,sans-serif;color:var(--pt-dim)}
-#daybook-columns .pt-sample,#daybook-columns .pt-ticks,#daybook-columns .pt-fields input,#daybook-columns .pt-stamp,#daybook-columns .pt-clock-label {font-variant-numeric:tabular-nums}
+#daybook-columns .pt-sample,#daybook-columns .pt-ticks,#daybook-columns .pt-clock-label,#daybook-columns .pt-help,#daybook-columns .pt-origin-note {font:normal 12px/1.45 "Inter",-apple-system,sans-serif;color:var(--pt-dim)}
+#daybook-columns .pt-ticks,#daybook-columns .pt-fields input,#daybook-columns .pt-clock-label {font-variant-numeric:tabular-nums}
+#daybook-columns .pt-sample select {margin-left:3px;padding:4px 6px;background:var(--pt-paper);color:var(--pt-ink);border:1px solid var(--pt-edge);border-radius:6px;font:inherit}
 #daybook-columns .pt-range {padding:10px 24px 7px;background:var(--pt-soft);border-bottom:1px solid var(--pt-edge)}
 #daybook-columns .pt-tools {justify-content:space-between;margin-bottom:7px}
 #daybook-columns .pt-fields {gap:6px;flex-wrap:wrap;color:var(--pt-dim)}
@@ -122,26 +123,26 @@ try {
 #daybook-columns .pt-grid {display:grid;width:100%;min-width:var(--pt-min,0);grid-template-columns:var(--pt-gutter,64px) repeat(var(--pt-count,3),minmax(0,1fr));align-items:stretch}
 #daybook-columns .pt-extent:not(:empty) {display:block;margin-top:4px;font-size:12px;color:var(--pt-dim)}
 #daybook-columns .pt-clock {position:sticky;left:0;z-index:2;background:var(--pt-paper)}
-#daybook-columns .pt-lane {min-width:0;border-left:1px solid var(--pt-edge)}
-#daybook-columns .pt-head {height:40px;display:flex;align-items:center;gap:6px;padding:0 9px;position:sticky;top:0;z-index:1;background:var(--pt-paper);border-bottom:1px solid var(--pt-edge);user-select:none}
+#daybook-columns .pt-lane {min-width:0}
+#daybook-columns .pt-head {height:40px;display:flex;align-items:center;gap:6px;padding:0 12px;position:sticky;top:0;z-index:1;background:var(--pt-paper);user-select:none}
 #daybook-columns .pt-clock .pt-head {padding-left:9px;color:var(--pt-dim);font-size:11px}
 #daybook-columns .pt-head h3 {min-width:0;font:600 14px/1.2 "Inter",-apple-system,sans-serif;color:var(--pt-color)}
+#daybook-columns .pt-head .pt-lane-select {border:0;background:transparent;color:inherit;font:inherit;padding:0;text-align:left}
+#daybook-columns .pt-lane-select:is(:hover,[aria-pressed=true],[aria-pressed=mixed]) {text-decoration:underline;text-underline-offset:3px}
 #daybook-columns .pt-head .pt-lane-copy {margin-left:auto;border-color:transparent;color:var(--pt-dim);font-size:12px;padding:3px 4px}
-#daybook-columns .pt-check {width:14px;height:14px;flex:none;margin:0;accent-color:var(--pt-color);cursor:pointer}
 #daybook-columns .pt-track {position:relative;min-width:0;overflow:clip}
 #daybook-columns .pt-unrecorded {position:absolute;inset:0 0 auto;height:0;background:var(--pt-soft);pointer-events:none}
 #daybook-columns .pt-clock-label {position:absolute;right:6px;white-space:nowrap;font-size:11px;transform:translateY(-50%)}
-#daybook-columns .pt-line {position:absolute;left:0;right:0;border-top:1px solid var(--pt-tick);pointer-events:none}
-#daybook-columns .pt-dot {position:absolute;left:1px;width:5px;height:5px;transform:translateY(-50%);background:var(--pt-color);border-radius:50%;pointer-events:none}
-#daybook-columns .pt-span {position:absolute;left:3px;width:2px;background:var(--pt-color);border-radius:2px;opacity:.36;pointer-events:none}
 #daybook-columns .pt-bundle {position:absolute;left:8px;min-width:0;transform-origin:top left}
 #daybook-columns .pt-bundle[data-lens] {cursor:zoom-in}
-#daybook-columns .pt-entry {padding:3px 5px 5px;border-radius:5px;min-width:0}
+#daybook-columns .pt-entry {position:relative;padding:3px 5px 5px;border-radius:5px;min-width:0}
 #daybook-columns .pt-entry + .pt-entry {margin-top:4px}
 #daybook-columns .pt-entry[data-picked] {background:color-mix(in srgb,var(--pt-color) 9%,var(--pt-paper))}
-#daybook-columns .pt-meta {display:flex;align-items:center;gap:5px;user-select:none}
-#daybook-columns .pt-stamp {color:var(--pt-color);font-size:11px}
-#daybook-columns .pt-body {margin-top:3px;overflow-wrap:anywhere;font:normal 17px/1.35 Georgia,serif}
+#daybook-columns .pt-entry .pt-passage-pick {position:absolute;inset:0;width:100%;height:100%;padding:0;border:0;background:transparent;cursor:text}
+#daybook-columns .pt-body {position:relative;pointer-events:none;overflow-wrap:anywhere;font:normal 17px/1.35 Georgia,serif}
+#daybook-columns .pt-text,#daybook-columns .pt-body .pt-origin {pointer-events:auto}
+#daybook-columns .pt-text {cursor:text}
+#daybook-columns [data-lens] .pt-text,#daybook-columns [data-lens] .pt-passage-pick {cursor:zoom-in}
 #daybook-columns .pt-lane[data-lane=save] .pt-body {font:normal 15px/1.42 "Inter",-apple-system,sans-serif}
 #daybook-columns .pt-fold {position:absolute;right:4px;z-index:1;display:flex;align-items:flex-start;justify-content:flex-end;color:var(--pt-color)}
 #daybook-columns .pt-fold[data-picked] {background:color-mix(in srgb,var(--pt-color) 9%,var(--pt-paper));border-radius:4px}
@@ -152,7 +153,6 @@ try {
 #daybook-columns .pt-detail-head {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px}
 #daybook-columns .pt-detail-head h3 {font:500 15px/1.35 system-ui}
 #daybook-columns .pt-detail-entries {display:grid;gap:5px}
-#daybook-columns .pt-detail-entries .pt-entry {border-left:2px solid var(--pt-color);padding-left:10px}
 #daybook-columns .pt-origin {display:inline-flex;align-items:center;justify-content:center;width:25px;height:22px;vertical-align:middle;margin-inline-start:4px;padding:0;color:var(--pt-save);background:var(--pt-soft)}
 #daybook-columns .pt-icon {display:inline-block;position:relative;width:16px;height:16px;flex:none}
 #daybook-columns .pt-icon::before,#daybook-columns .pt-icon::after {content:"";position:absolute;box-sizing:border-box}
@@ -192,7 +192,6 @@ try {
 }
 @media(pointer:coarse) {
   #daybook-columns .pt-origin,#daybook-columns .pt-head .pt-lane-copy {min-width:31px;min-height:30px}
-  #daybook-columns .pt-check {width:17px;height:17px}
 }
 </style>
 <script>
@@ -217,7 +216,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     return span >= 3*86400 ? day : day + ' ' + full.split(' ')[1];
   }
   const picks = new Map();
-  let start = 0, until = 30, visible = [], layoutFrame = 0, previewScope = 'auto';
+  let start = 0, until = 60, visible = [], layoutFrame = 0, previewScope = 'auto';
   let horizon = duration, heldHorizon = 0;
   const scroll = find('.pt-scroll'), grid = find('.pt-grid'), ruler = find('.pt-ruler');
   const preview = find('.pt-copy-preview'), area = preview.querySelector('textarea');
@@ -239,13 +238,6 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     if (name) el.setAttribute('aria-label', name);
     return el;
   }
-  function checkbox(name) {
-    const el = element('input', 'pt-check');
-    el.type = 'checkbox';
-    el.setAttribute('aria-label', name);
-    return el;
-  }
-
   // Fictional continuation of the same print review used by the one-minute studies.
   const cover = sample.find(e => e.id === 'cover');
   const later = [
@@ -269,7 +261,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     {id:'friday', at:567, end:575, lane:'sys', text:'Great. I’ll look for it on Friday.'},
     {id:'goodbye', at:585, end:592, lane:'mic', text:'See you at the press check.'}
   ];
-  const entries = [...sample, ...later].filter(e => e.id !== cover.id && e.text.trim()).map(e => ({
+  const conversation = [...sample, ...later].filter(e => e.id !== cover.id && e.text.trim()).map(e => ({
     ...e, label: e.name || lanes[e.lane], type: e.lane === 'save' ? (e.asset ? 'image' : 'clip') : 'audio'
   }));
   const screenVisits = [[6,16], [40,46], [146,160], [312,346], [544,560]];
@@ -279,23 +271,101 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     if (!seen) { visit = null; continue; }
     if (!visit) {
       visit = {...cover, id: 'cover-' + t, type: 'monitor', label: 'On screen', at: t, end: t, samples: 0};
-      entries.push(visit);
+      conversation.push(visit);
     }
     visit.end = t;
     visit.samples++;
   }
-  entries.sort((a, b) => a.at - b.at);
-  const byId = new Map(entries.map(e => [e.id, e]));
-  const audioWindows = [[0,55],[70,duration]];
+  // Each minute contains sixty spoken words across both speakers. The image
+  // and clipboard observations are shared with the quieter recording.
+  const spokenMinutes = [
+    [
+      'I brought the cover proof to the window this morning. The green looks warmer on paper than it does on my screen. See the space above the title? When I put my thumb over the top edge, the whole thing suddenly feels a little cramped.',
+      'I see it. Leave the lettering alone and give the title another finger of sky.'
+    ],
+    [
+      'I can move the little hill down without touching the horizon. Here, hold this corner against the window while I trace the old pencil line on the back.',
+      'There it is. The new curve picks up the shape of the lowercase letters. I would keep that uneven bit at the left. It looks like somebody actually walked along the ridge.'
+    ],
+    [
+      'Let me turn a few pages while the ink dries. This spread is the one I keep coming back to. The drawing runs all the way to the fold, then disappears for a moment before it meets the path on the other side. You almost have to flatten the book with your hand to follow the walk across both pages.'
+    ],
+    [
+      'The fold hides the footbridge. Could we move the drawing a little to the right?',
+      'We could. Lay that scrap over the margin and see where the bridge lands.',
+      'There. Now both ends are visible, and the river still runs straight through the fold.',
+      'Keep the scrap there. I want to mark that position before we turn the page again.'
+    ],
+    [
+      'I tucked two paper samples into the back pocket. The smooth sheet is the one from last week. The rough one came from the printer yesterday.',
+      'Close your eyes and turn them over. You can tell which is which just by the sound. The rough sheet makes a softer noise, and the pencil barely shines when it catches the light.'
+    ],
+    [
+      'Here is the cover again with the title lifted. I taped the new version over the old one so we can flip between them without losing our place.',
+      'That little strip of sky makes a difference. From the other end of the table I can read the title and still see the hills. Put my initials on this copy, please.'
+    ],
+    [
+      'Before I send the file, I want to check the new green thread against this cover. The spool looked almost black in the cupboard, but here by the window you can see blue in it.',
+      'Use the piece tied around the first edition. Lay them side by side. That older thread has faded, and people will see the books together.'
+    ],
+    [
+      'What should I tell the printer about the first run?',
+      'Ask for two hundred copies. Set aside twelve for the people who drew the maps, and keep one untrimmed sheet for the window display.',
+      'I like that. People can see the crop marks and the little color patches we normally cut away. I will put those quantities on the slip.'
+    ],
+    [
+      'The slip says Friday, but the delivery entrance closes early. I can meet the van in the lane if the driver rings the bell beside the big blue door.',
+      'Write that on the outside of the carton. Last time the driver went round to the shop and carried three boxes up the stairs before anyone noticed what was happening downstairs.'
+    ],
+    [
+      'All right. I have the cover, the paper sample, and the marked spread in one envelope. The green thread is taped to the flap where it will be easy to find.',
+      'Perfect. Bring the first freshly folded copy to the press check. We can open it at the bridge, compare it with this proof, and know whether the adjustment worked.'
+    ]
+  ];
+  const steadySpeech = spokenMinutes.flatMap((turns,minute) => {
+    let second = minute * 60;
+    return turns.flatMap((transcript,turn) => {
+      const lane = turn % 2 ? 'sys' : 'mic';
+      const overlap = turn === 1 && [0,4,7].includes(minute) ? 2 : 0;
+      return transcript.split(/(?<=[.!?])\s+/).map((text,sentence) => {
+        const at = second - overlap;
+        second += text.split(/\s+/).length;
+        return {id:['steady',minute,turn,sentence].join('-'), at, end:second-overlap, text, lane, type:'audio', label:lanes[lane]};
+      });
+    });
+  });
+  const chronological = (a,b) => a.at - b.at;
+  const recordings = {
+    steady: [...steadySpeech, ...conversation.filter(e => e.lane === 'save')].sort(chronological),
+    pauses: conversation.sort(chronological)
+  };
+  let sampleName = 'steady', entries = recordings.steady;
+  let byId = new Map(entries.map(e => [e.id,e]));
+  let audioWindows = [[0,duration]];
   function intersects(e) {
     if (e.at >= until || !e.text.trim()) return false;
     if (e.type === 'monitor') return e.end >= start;
     return e.end > e.at ? e.end > start : e.at >= start;
   }
   const clippedStart = e => Math.max(start, e.at);
-  const clippedEnd = e => Math.min(until, e.end);
   const spanLabel = e => e.type === 'monitor' ? stamp(e.at) + '–' + stamp(e.end) : stamp(e.at);
   const full = e => [0, e.text.length];
+  const fullyPicked = e => picks.get(e.id)?.[0] === 0 && picks.get(e.id)?.[1] === e.text.length;
+
+  function chooseSample(name) {
+    if (!Object.hasOwn(recordings,name) || name === sampleName) return;
+    sampleName = name;
+    entries = recordings[name];
+    byId = new Map(entries.map(e => [e.id,e]));
+    audioWindows = name === 'steady' ? [[0,duration]] : [[0,55],[70,duration]];
+    picks.clear();
+    laneAnchors = {};
+    previewScope = 'auto';
+    find('[data-sample]').value = name;
+    drawOverview();
+    drawGrid();
+  }
+  find('[data-sample]').addEventListener('change', event => chooseSample(event.target.value));
 
   function drawOverview() {
     const bands = find('.pt-bands');
@@ -421,15 +491,24 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
   function makeEntry(e) {
     const article = element('article', 'pt-entry');
     article.dataset.entry = e.id;
-    const meta = element('div', 'pt-meta');
-    const box = checkbox('Select ' + e.label + ' at ' + stamp(e.at));
-    box.addEventListener('click', ev => pickEntry(e, box.checked, ev.shiftKey));
-    const timing = e.type === 'monitor' ? spanLabel(e) : stamp(e.at) + (e.lane === 'save' ? ' · ' + e.label : '');
-    meta.append(box, element('span','pt-stamp', timing));
+    // The native button supplies keyboard and touch activation. The words
+    // sit above it as ordinary selectable text, alongside any source icon.
+    const pick = button('pt-passage-pick','','Select '+e.label+' passage at '+spanLabel(e));
     const body = element('div','pt-body');
     body.append(element('span', 'pt-text', e.text));
     if (e.lane === 'save') body.append(sourceButton(e));
-    article.append(meta, body);
+    article.append(pick,body);
+    article.addEventListener('click', ev => {
+      if (ev.target.closest('.pt-origin')) return;
+      const selection = window.getSelection();
+      if (ev.target.closest('.pt-text') && selection && !selection.isCollapsed) {
+        if (!ev.shiftKey) return;
+        selection.removeAllRanges();
+      }
+      const group = article.closest('.pt-bundle')?.dataset.lens;
+      if (group && ev.target.closest('.pt-text')) readGroup(group);
+      else pickEntry(e, !fullyPicked(e), ev.shiftKey);
+    });
     return article;
   }
   const lastSelected = () => visible.filter(e => picks.has(e.id));
@@ -460,7 +539,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
       const e = byId.get(article.dataset.entry);
       const selected = picks.get(e.id);
       article.toggleAttribute('data-picked', !!selected);
-      article.querySelector('input').checked = !!selected;
+      article.querySelector('.pt-passage-pick').setAttribute('aria-pressed', selected && !fullyPicked(e) ? 'mixed' : String(!!selected));
       if (selected && (selected[0] !== 0 || selected[1] !== e.text.length)) {
         const node = article.querySelector('.pt-text').firstChild;
         const range = document.createRange();
@@ -478,10 +557,9 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
       const key = head.parentElement.dataset.lane;
       const all = visible.filter(e => e.lane === key);
       const chosen = all.filter(e => picks.has(e.id));
-      const box = head.querySelector('input');
-      box.checked = all.every(e => picks.get(e.id)?.[0] === 0 && picks.get(e.id)?.[1] === e.text.length);
-      box.indeterminate = chosen.length > 0 && !box.checked;
-      head.querySelector('button').setAttribute('aria-label',(chosen.length ? 'Copy selected from ' : 'Copy column ') + lanes[key]);
+      const select = head.querySelector('.pt-lane-select');
+      select.setAttribute('aria-pressed', all.every(fullyPicked) ? 'true' : chosen.length ? 'mixed' : 'false');
+      head.querySelector('.pt-lane-copy').setAttribute('aria-label',(chosen.length ? 'Copy selected from ' : 'Copy column ') + lanes[key]);
     }
     const selected = lastSelected();
     const pickButton = find('[data-copy=picks]');
@@ -555,15 +633,8 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
       for (const point of group) point.bundle.dataset.lens = key;
     }
   }
-  grid.addEventListener('click', event => {
-    const bundle = event.target.closest('.pt-bundle[data-lens]');
-    if (bundle && !event.target.closest('input,button') && window.getSelection()?.isCollapsed) {
-      readGroup(bundle.dataset.lens);
-    }
-  });
 
-  // All positions and durations use this single linear scale. Only the type
-  // shrinks to fit tight gaps. Reading targets leave each original at its time.
+  // Text and clock labels share a linear scale. Shrink type to fit tight gaps.
   function measure() {
     if (!grid.clientWidth) return;
     const height = scroll.clientWidth < 560 ? 400 : 480;
@@ -573,7 +644,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     // size locally, so their letters fit without moving either start time.
     const nominalSize = Math.min(1, (30 / span) ** (1/6));
     const steps = [1,2,5,10,15,30,60,120,300,600,900,1800,3600,7200,21600,43200,86400];
-    const desiredStep = 40 / pixels;
+    const desiredStep = 85 / pixels;
     const step = steps.find(n => n >= desiredStep) || 86400 * 10 ** Math.ceil(Math.log10(desiredStep / 86400));
     const ticks = [start];
     for (let t = Math.ceil(start / step) * step; t < until; t += step) {
@@ -583,26 +654,21 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     folds.clear();
     for (const track of grid.querySelectorAll('.pt-track')) {
       track.style.height = (height + 40) + 'px';
-      const lines = track.querySelector('.pt-lines');
-      const isClock = !!track.closest('.pt-clock');
-      lines.replaceChildren();
-      if (!isClock && until > duration) {
+      if (track.closest('.pt-clock')) {
+        track.replaceChildren(...ticks.map(t => {
+          const mark = element('span','pt-clock-label',tickLabel(t,span));
+          mark.dataset.at = t;
+          mark.style.top = atY(t) + 'px';
+          return mark;
+        }));
+        continue;
+      }
+      track.querySelector('.pt-unrecorded')?.remove();
+      if (until > duration) {
         const after = element('div', 'pt-unrecorded');
         after.style.top = atY(Math.max(start, duration)) + 'px';
         after.style.height = Math.min(span, until - duration) * pixels + 'px';
-        lines.append(after);
-      }
-      for (const t of ticks) {
-        const mark = element('span', isClock ? 'pt-clock-label' : 'pt-line', isClock ? tickLabel(t,span) : undefined);
-        mark.dataset.at = t;
-        mark.style.top = atY(t) + 'px';
-        lines.append(mark);
-      }
-      if (isClock) continue;
-      for (const mark of track.querySelectorAll('.pt-span,.pt-dot')) {
-        const t = Number(mark.dataset.at);
-        mark.style.top = atY(t) + 'px';
-        if (mark.dataset.end) mark.style.height = (Number(mark.dataset.end) - t) * pixels + 'px';
+        track.prepend(after);
       }
       for (const old of track.querySelectorAll('.pt-fold')) old.remove();
       const bundles = Array.from(track.querySelectorAll('.pt-bundle'));
@@ -628,7 +694,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     if (openFold && !folds.has(openFold)) closeDetail();
     if (visible.length) find('.pt-help').textContent = folds.size
       ? 'Open ⋯ to read small passages at full size. Copy conversation includes every passage in this range.'
-      : 'Drag the overview to choose a time range. Select passages or highlight words in any column.';
+      : 'Click a passage to select it, or drag across words. Click a column heading to select the whole column.';
   }
   function queueMeasure() {
     cancelAnimationFrame(layoutFrame);
@@ -675,7 +741,6 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     grid.style.setProperty('--pt-count', Math.max(1,active.length));
     grid.style.setProperty('--pt-min', active.length < 2 ? '0px' : (gutter + active.length*169)+'px');
     const clock = element('div','pt-clock'), track = element('div','pt-track');
-    track.append(element('div','pt-lines'));
     clock.append(element('div','pt-head','Time'),track);grid.append(clock);
     const empty = find('.pt-empty');
     empty.hidden = !!active.length;
@@ -691,7 +756,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
         empty.append(reset);
       }
       const blank = element('div'), space = element('div','pt-track');
-      space.append(element('div','pt-lines'));blank.append(element('div','pt-head'),space);grid.append(blank);
+      blank.append(element('div','pt-head'),space);grid.append(blank);
       find('.pt-help').textContent = 'Drag the overview to choose another time range.';
       preview.hidden = true;
       find('[data-preview-toggle]').setAttribute('aria-expanded','false');
@@ -702,24 +767,24 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
     for (const key of active) {
       const lane = element('section','pt-lane'), head=element('div','pt-head'), body=element('div','pt-track');
       lane.dataset.lane=key;lane.setAttribute('aria-label',lanes[key]);
-      const box=checkbox('Select column '+lanes[key]), copy=button('pt-lane-copy','Copy','Copy column '+lanes[key]);
+      const select = button('pt-lane-select',lanes[key],'Select column '+lanes[key]);
+      const title = element('h3');
+      title.append(select);
+      const copy = button('pt-lane-copy','Copy','Copy column '+lanes[key]);
       const local=visible.filter(e=>e.lane===key);
-      box.addEventListener('change',()=>{
-        for(const e of local){if(box.checked)picks.set(e.id,full(e));else picks.delete(e.id);}
+      select.addEventListener('click',()=>{
+        const clear = local.every(fullyPicked);
+        for (const e of local) {
+          if (clear) picks.delete(e.id);
+          else picks.set(e.id,full(e));
+        }
         updatePicks();
       });
       copy.addEventListener('click',()=>copyToClipboard(key));
-      head.append(box,element('h3','',lanes[key]),copy);lane.append(head,body);grid.append(lane);
-      body.append(element('div','pt-lines'));
+      head.append(title,copy);lane.append(head,body);grid.append(lane);
       const bundles = new Map();
       for(const e of local) {
-        const at=clippedStart(e), end=clippedEnd(e);
-        const dot=element('span','pt-dot');
-        dot.dataset.at=at;body.append(dot);
-        if(end>at) {
-          const span=element('div','pt-span');
-          span.dataset.at=at;span.dataset.end=end;body.append(span);
-        }
+        const at=clippedStart(e);
         if(!bundles.has(at)) {
           const bundle=element('div','pt-bundle');bundle.dataset.at=at;
           bundles.set(at,bundle);body.append(bundle);
@@ -913,11 +978,13 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
   setBounds(start,until);
   if (remember && window.openai) {
     let saved, timer;
-    const snapshot = () => ({from:start, until, excerpts:[...picks]});
+    const snapshot = () => ({sample:sampleName, from:start, until, excerpts:[...picks]});
     function restore(state) {
       const view = state?.privateContent?.parallelTranscript;
       if (!view || !Number.isSafeInteger(view.from) || !Number.isSafeInteger(view.until) ||
           view.from < 0 || view.until > maxOffset || view.from >= view.until) return;
+      // Restore excerpts from the original sample when reopening an older study.
+      chooseSample(view.sample ?? (view.excerpts?.length ? 'pauses' : 'steady'));
       picks.clear();
       for (const item of Array.isArray(view.excerpts) ? view.excerpts : []) {
         if (!Array.isArray(item) || !Array.isArray(item[1])) continue;
@@ -939,7 +1006,7 @@ function mountParallelTranscript(root, sample, pictures, remember = false) {
         const state = snapshot(), key = JSON.stringify(state);
         if (key === saved) return;
         saved = key;
-        window.openai?.setWidgetState?.({modelContent:{timeWindow:[stamp(start),stamp(until)]},
+        window.openai?.setWidgetState?.({modelContent:{sample:find('[data-sample]').selectedOptions[0].textContent, timeWindow:[stamp(start),stamp(until)]},
           privateContent:{parallelTranscript:state}})?.catch(() => {});
       },180);
     }

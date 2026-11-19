@@ -63,6 +63,8 @@ pub struct Passage {
     pub source: String,
     pub text: String,
     pub image_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_image: Option<i64>,
     pub truncated: bool,
 }
 impl Passage {

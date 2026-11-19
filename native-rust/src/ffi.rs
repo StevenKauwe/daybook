@@ -209,6 +209,8 @@ unsafe extern "C" {
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     pub fn CGPreflightScreenCaptureAccess() -> bool;
+    pub fn CGImageGetWidth(image: *const c_void) -> usize;
+    pub fn CGImageGetHeight(image: *const c_void) -> usize;
     pub fn CGImageGetDataProvider(image: *const c_void) -> *const c_void;
     pub fn CGDataProviderCopyData(provider: *const c_void) -> *mut c_void;
     pub fn CGWindowListCopyWindowInfo(options: u32, relative: u32) -> *mut c_void;

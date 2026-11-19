@@ -22,6 +22,20 @@ impl Store {
  CREATE VIEW IF NOT EXISTS journal_entries AS SELECT * FROM observations
  WHERE kind NOT IN ('transcript','preview','preview_abandoned','transcript_suppressed')
  OR ltrim(text,char(9,10,11,12,13,32,133,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288))<>'';
+ CREATE VIEW IF NOT EXISTS reading_entries AS SELECT id,at,end_at,
+    CASE kind WHEN 'screen_layout' THEN 'screen' ELSE kind END AS kind,
+    CASE kind WHEN 'screen_layout' THEN 'passive_screen' ELSE source END AS source,text,details,source_id
+    FROM journal_entries WHERE (kind<>'screen_layout' OR text<>'')
+    AND (kind<>'screen' OR source<>'passive_screen' OR json_extract(details,'$.capture_layout') IS NULL);
+ CREATE TABLE IF NOT EXISTS passive_layouts(observation_id INTEGER PRIMARY KEY REFERENCES observations(id) ON DELETE CASCADE,geometry TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS passive_captures(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,layout_id INTEGER NOT NULL REFERENCES passive_layouts(observation_id) ON DELETE CASCADE);
+ CREATE TABLE IF NOT EXISTS passive_images(id INTEGER PRIMARY KEY,jpeg BLOB NOT NULL);
+ CREATE TABLE IF NOT EXISTS passive_capture_images(capture_id INTEGER PRIMARY KEY REFERENCES passive_captures(id) ON DELETE CASCADE,image_id INTEGER NOT NULL REFERENCES passive_images(id));
+ CREATE VIEW IF NOT EXISTS passive_previews AS SELECT c.layout_id,min(i.capture_id) AS capture_id
+    FROM passive_capture_images i CROSS JOIN passive_captures c ON c.id=i.capture_id GROUP BY c.layout_id;
+ CREATE INDEX IF NOT EXISTS passive_captures_at ON passive_captures(at DESC,id DESC);
+ CREATE INDEX IF NOT EXISTS passive_captures_layout ON passive_captures(layout_id,id);
+ CREATE INDEX IF NOT EXISTS obs_passive_legacy ON observations(at DESC,id ASC) WHERE kind='screen' AND source IN ('passive_screen','screen','vision') AND json_extract(details,'$.capture_layout') IS NULL;
  CREATE TABLE IF NOT EXISTS saved_images(observation_id INTEGER PRIMARY KEY REFERENCES observations(id) ON DELETE CASCADE,png BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS note_draft_images(image_id INTEGER PRIMARY KEY REFERENCES saved_images(observation_id) ON DELETE CASCADE);
  CREATE TABLE IF NOT EXISTS sources(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,end_at INTEGER NOT NULL,track TEXT NOT NULL,path TEXT UNIQUE NOT NULL,status TEXT NOT NULL DEFAULT 'pending',error TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0);
@@ -246,7 +260,7 @@ impl Store {
             .unwrap_or(0) as usize
     }
     pub fn recent(&self) -> Result<Value> {
-        let mut q=self.db.prepare("SELECT id,at,end_at,kind,source,text,details,source_id FROM journal_entries ORDER BY id DESC LIMIT 100")?;
+        let mut q=self.db.prepare("SELECT id,at,end_at,kind,source,text,details,source_id FROM reading_entries ORDER BY id DESC LIMIT 100")?;
         let rows=q.query_map([],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"details":serde_json::from_str::<Value>(&r.get::<_,String>(6)?).unwrap_or(Value::Null),"source_id":r.get::<_,Option<i64>>(7)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
         Ok(json!(rows))
     }
@@ -260,7 +274,7 @@ impl Store {
             .unwrap_or(0)
     }
     pub fn search(&self, text: &str) -> Result<Value> {
-        let mut q=self.db.prepare("SELECT id,at,kind,source,text,source_id FROM journal_entries WHERE instr(lower(text),lower(?1))>0 ORDER BY id DESC LIMIT 100")?;
+        let mut q=self.db.prepare("SELECT id,at,kind,source,text,source_id FROM reading_entries WHERE instr(lower(text),lower(?1))>0 ORDER BY id DESC LIMIT 100")?;
         let rows=q.query_map([text],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"kind":r.get::<_,String>(2)?,"source":r.get::<_,String>(3)?,"text":r.get::<_,String>(4)?,"source_id":r.get::<_,Option<i64>>(5)?})))?.collect::<std::result::Result<Vec<_>,_>>()?;
         Ok(json!(rows))
     }

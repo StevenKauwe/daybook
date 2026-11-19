@@ -11,15 +11,20 @@ use std::{
 use tiny_http::{Header, Request, Response, StatusCode};
 
 const MAX_FILE: usize = 64 * 1024 * 1024;
-pub struct Images(mpsc::SyncSender<(i64, Request)>);
+#[derive(Clone, Copy)]
+pub enum Source {
+    Journal,
+    Passive,
+}
+pub struct Images(mpsc::SyncSender<(Source, i64, Request)>);
 
 impl Images {
     pub fn new(root: PathBuf) -> Result<Self> {
-        let (tx, rx) = mpsc::sync_channel::<(i64, Request)>(1);
+        let (tx, rx) = mpsc::sync_channel::<(Source, i64, Request)>(1);
         thread::Builder::new()
             .name("archive-images".into())
             .spawn(move || {
-                for (id, request) in rx {
+                for (source, id, request) in rx {
                     let Ok(db) = Connection::open_with_flags(
                         root.join("daybook.sqlite"),
                         OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -27,7 +32,11 @@ impl Images {
                         let _ = request.respond(Response::empty(503));
                         continue;
                     };
-                    match original(&db, &root, id) {
+                    let data = match source {
+                        Source::Journal => original(&db, &root, id),
+                        Source::Passive => passive_image(&db, id),
+                    };
+                    match data {
                         Ok((reader, mime, len)) => {
                             let headers = vec![
                                 Header::from_bytes("Content-Type", mime).unwrap(),
@@ -51,17 +60,27 @@ impl Images {
         Ok(Self(tx))
     }
 
-    pub fn send(&self, suffix: &str, request: Request) {
+    pub fn send(&self, source: Source, suffix: &str, request: Request) {
         let Some(id) = suffix.parse::<i64>().ok().filter(|id| *id > 0) else {
             let _ = request.respond(Response::empty(404));
             return;
         };
-        if let Err(e) = self.0.try_send((id, request)) {
-            let (mpsc::TrySendError::Full((_, request))
-            | mpsc::TrySendError::Disconnected((_, request))) = e;
+        if let Err(e) = self.0.try_send((source, id, request)) {
+            let (mpsc::TrySendError::Full((_, _, request))
+            | mpsc::TrySendError::Disconnected((_, _, request))) = e;
             let _ = request.respond(Response::empty(503));
         }
     }
+}
+
+fn passive_image(
+    db: &Connection,
+    capture: i64,
+) -> Result<(Box<dyn Read + '_>, &'static str, usize)> {
+    // Read the mapping and bytes in the same SQLite snapshot as eviction.
+    let bytes:Vec<u8>=db.query_row("SELECT i.jpeg FROM passive_capture_images c JOIN passive_images i ON i.id=c.image_id WHERE c.capture_id=?1",[capture],|r|r.get(0))?;
+    let len = bytes.len();
+    Ok((Box::new(std::io::Cursor::new(bytes)), "image/jpeg", len))
 }
 
 enum Original {

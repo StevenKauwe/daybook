@@ -297,16 +297,32 @@ unsafe fn screen_reading(
     let message = if same {
         json!({"type":"screen_unchanged","sample":sample})
     } else {
-        let (text, words) = screen::recognize(image)?;
-        let mut message = json!({"type":"screen","sample":sample,"text":text,"words":words});
-        // Keep all recognized lines within the bridge's 256 KiB message limit.
+        use base64::Engine;
+        let recognized = screen::recognize(image);
+        let failed = recognized.is_err();
+        let reading = recognized.unwrap_or_else(|_| screen::Reading {
+            text: String::new(),
+            lines: vec![],
+            words: vec![],
+        });
+        let mut message = json!({"type":"screen","sample":sample,"text":reading.text,"words":reading.words,"line_boxes":reading.lines,
+            "pixels":[CGImageGetWidth(image.0.0),CGImageGetHeight(image.0.0)]});
+        // Bound OCR separately from the optional JPEG.
         while message.to_string().len() > 255 * 1024 {
             let boxes = message["words"].as_array_mut().unwrap();
             boxes.truncate(boxes.len() / 2);
         }
+        if failed {
+            message["ocr_failed"] = json!(true);
+        }
+        if let Ok(jpeg) = screen::jpeg(image) {
+            message["jpeg"] = Value::String(base64::engine::general_purpose::STANDARD.encode(jpeg));
+        }
         message
     };
-    *previous = signature.map(|hash| (sample, hash));
+    if same || (message["ocr_failed"] != true && message["jpeg"].is_string()) {
+        *previous = signature.map(|hash| (sample, hash));
+    }
     Ok(message)
 }
 impl App {
@@ -1102,6 +1118,19 @@ fn run() -> Result<(), String> {
             emit(ocr_bench::run(&args[2..])?);
             return Ok(());
         }
+        Some("--self-test-screen-frame") => {
+            let path = std::path::Path::new(args.get(2).ok_or("Synthetic image path required")?);
+            let sample = ScreenSample {
+                session: "fixture".into(),
+                target: "fixture".into(),
+                sequence: 1,
+                at: 0,
+            };
+            let frame =
+                unsafe { screen_reading(&clipboard::load_image(path)?, sample, 5, &mut None)? };
+            emit(frame);
+            return Ok(());
+        }
         Some("--make-ocr-fixture") => return ocr_bench::fixture(&args[2..]),
         Some(mode @ ("--read-clipboard" | "--ocr-file" | "--self-test-clipboard")) => {
             let path = std::path::Path::new(args.get(2).ok_or("Image path required")?);
@@ -1201,12 +1230,23 @@ fn run() -> Result<(), String> {
                 || !same["text"].is_null()
                 || moved["text"] != first["text"]
                 || cleared["text"] != ""
-                || first.as_object().unwrap().len() != 4
+                || first["pixels"] != json!([800, 180])
+                || first["line_boxes"][0]["height"]
+                    .as_f64()
+                    .unwrap_or_default()
+                    <= 0.0
+                || words[0]["index"] != 0
+                || !first["jpeg"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("/9j/"))
+                || same.get("jpeg").is_some()
+                || !cleared["jpeg"].is_string()
+                || first.as_object().unwrap().len() != 7
             {
-                return Err("Passive screen change detection or text-only payload mismatch".into());
+                return Err("Passive screen change detection or screenshot payload mismatch".into());
             }
             emit(
-                json!({"type":"test","result":"PASS Rust native Vision OCR and word boxes, repeated frames, window changes and blank screens","text":text,"words":words.len()}),
+                json!({"type":"test","result":"PASS native Vision positions, JPEGs, repeated frames, window changes and blank screens","text":text,"words":words.len()}),
             );
             Ok(())
         };

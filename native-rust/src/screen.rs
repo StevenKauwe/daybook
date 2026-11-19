@@ -5,7 +5,7 @@ use objc2::{msg_send, rc::autoreleasepool, runtime::AnyObject};
 use objc2_foundation::NSRange;
 use serde_json::{Value, json};
 use std::{path::Path, ptr};
-/// Only this digest survives the check. If pixels are unavailable, run OCR.
+/// Compare immutable frames without keeping a previous image in the native worker.
 pub unsafe fn fingerprint(image: &Image) -> Option<[u8; 32]> {
     let provider = CGImageGetDataProvider(image.0.0);
     if provider.is_null() {
@@ -56,18 +56,21 @@ pub unsafe fn foreground_window() -> (i32, u32) {
     }
     (pid, 0)
 }
-pub unsafe fn recognize(image: &Image) -> Result<(String, Vec<Value>), String> {
+pub struct Reading {
+    pub text: String,
+    pub words: Vec<Value>,
+    pub lines: Vec<Value>,
+}
+
+pub unsafe fn recognize(image: &Image) -> Result<Reading, String> {
     read_image_text(image, true)
 }
 
 pub unsafe fn saved_text(image: &Image) -> Result<String, String> {
-    read_image_text(image, false).map(|(text, _)| text)
+    read_image_text(image, false).map(|reading| reading.text)
 }
 
-unsafe fn read_image_text(
-    image: &Image,
-    with_word_boxes: bool,
-) -> Result<(String, Vec<Value>), String> {
+unsafe fn read_image_text(image: &Image, with_word_boxes: bool) -> Result<Reading, String> {
     autoreleasepool(|_| {
         let request = new(c"VNRecognizeTextRequest");
         let _: () = msg_send![&*request,setRecognitionLevel:0usize];
@@ -86,7 +89,7 @@ unsafe fn read_image_text(
         let count: usize = msg_send![results, count];
         let mut text_out = String::new();
         let mut words = Vec::new();
-        let mut line_index = 0;
+        let mut line_boxes = Vec::new();
         let lines = if with_word_boxes {
             count.min(200)
         } else {
@@ -114,8 +117,11 @@ unsafe fn read_image_text(
                 }
                 continue;
             }
+            let line_index = line_boxes.len();
+            let r: Rect = msg_send![observation, boundingBox];
+            line_boxes.push(json!({"line":line_index,"x":r.origin.x,"y":r.origin.y,"width":r.size.width,"height":r.size.height}));
             let mut cursor = 0;
-            for word in line.split_whitespace() {
+            for (index, word) in line.split_whitespace().enumerate() {
                 if words.len() >= 1000 {
                     break;
                 }
@@ -135,44 +141,54 @@ unsafe fn read_image_text(
                     continue;
                 }
                 let r: Rect = msg_send![box_, boundingBox];
-                words.push(json!({"line":line_index,"text":word.chars().take(128).collect::<String>(),"x":r.origin.x,"y":r.origin.y,"width":r.size.width,"height":r.size.height,"confidence":confidence}));
+                words.push(json!({"line":line_index,"index":index,"text":word.chars().take(128).collect::<String>(),"x":r.origin.x,"y":r.origin.y,"width":r.size.width,"height":r.size.height,"confidence":confidence}));
             }
-            line_index += 1;
         }
-        Ok((text_out, words))
+        Ok(Reading {
+            text: text_out,
+            words,
+            lines: line_boxes,
+        })
     })
 }
-pub unsafe fn save_jpeg(image: &Image, root: &Path) -> Result<String, String> {
+pub unsafe fn jpeg(image: &Image) -> Result<Vec<u8>, String> {
     autoreleasepool(|_| {
         let rep: objc2::rc::Allocated<AnyObject> = msg_send![class(c"NSBitmapImageRep"), alloc];
         let rep: Obj = msg_send![rep,initWithCGImage:image.0.0.cast::<CGImageOpaque>()];
-        let quality: Obj = msg_send![class(c"NSNumber"),numberWithDouble:0.65f64];
         let key = string("NSImageCompressionFactor");
-        let properties: Obj =
-            msg_send![class(c"NSDictionary"),dictionaryWithObject:&*quality, forKey:&*key];
-        let data: *mut AnyObject =
-            msg_send![&*rep,representationUsingType:3usize, properties:&*properties];
-        if data.is_null() {
-            return Err("JPEG encoding failed".into());
+        for quality in [0.78_f64, 0.55, 0.3] {
+            let quality: Obj = msg_send![class(c"NSNumber"),numberWithDouble:quality];
+            let properties: Obj =
+                msg_send![class(c"NSDictionary"),dictionaryWithObject:&*quality, forKey:&*key];
+            let data: *mut AnyObject =
+                msg_send![&*rep,representationUsingType:3usize, properties:&*properties];
+            if data.is_null() {
+                continue;
+            }
+            let len: usize = msg_send![data, length];
+            let bytes: *const std::ffi::c_void = msg_send![data, bytes];
+            if !bytes.is_null() && (1..=2 * 1024 * 1024).contains(&len) {
+                return Ok(std::slice::from_raw_parts(bytes.cast::<u8>(), len).to_vec());
+            }
         }
-        let len: usize = msg_send![data, length];
-        if len > 2 * 1024 * 1024 {
-            return Err("JPEG exceeded 2 MiB cap".into());
-        }
-        let bytes: *const std::ffi::c_void = msg_send![data, bytes];
-        let path = format!(
-            "images/{}-{}.jpg",
-            std::process::id(),
-            (crate::stamp() * 1e6) as u64
-        );
-        std::fs::create_dir_all(root.join("images")).map_err(|e| e.to_string())?;
-        let target = root.join(&path);
-        let tmp = target.with_extension("tmp");
-        std::fs::write(&tmp, std::slice::from_raw_parts(bytes.cast::<u8>(), len))
-            .and_then(|_| std::fs::rename(tmp, target))
-            .map_err(|e| e.to_string())?;
-        Ok(path)
+        Err("Could not encode the sampled screen within 2 MiB".into())
     })
+}
+
+pub unsafe fn save_jpeg(image: &Image, root: &Path) -> Result<String, String> {
+    let bytes = jpeg(image)?;
+    let path = format!(
+        "images/{}-{}.jpg",
+        std::process::id(),
+        (crate::stamp() * 1e6) as u64
+    );
+    std::fs::create_dir_all(root.join("images")).map_err(|e| e.to_string())?;
+    let target = root.join(&path);
+    let tmp = target.with_extension("tmp");
+    std::fs::write(&tmp, bytes)
+        .and_then(|_| std::fs::rename(tmp, target))
+        .map_err(|e| e.to_string())?;
+    Ok(path)
 }
 pub unsafe fn synthetic_image() -> Result<Image, String> {
     drawn_image(800, 180, 1)

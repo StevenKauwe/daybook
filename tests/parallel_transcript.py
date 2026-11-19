@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 parser = argparse.ArgumentParser()
@@ -35,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix="daybook-parallel-api-") as directory:
         def call(path, body=None):
             payload = json.dumps(body).encode() if body is not None else None
             with urlopen(Request(base + path, data=payload, headers={"Content-Type":"application/json"}), timeout=5) as response:
-                return response.read() if path.startswith("/image/") else json.load(response)
+                return response.read() if path.startswith(("/image/","/passive_image/")) else json.load(response)
 
         assert call("/overview")["synthetic"]
         first = int(datetime.now().replace(hour=10, minute=14, second=0, microsecond=0).timestamp())
@@ -90,6 +91,46 @@ with tempfile.TemporaryDirectory(prefix="daybook-parallel-api-") as directory:
         assert len(visits)==4 and all(v["end"] > v["at"] for v in visits)
         assert [v["text"] for v in call("/screen_text", {"query":"TITLE CLEARANCE"})["items"]] == ["Increase the title clearance to 4 mm"]
         print("PASS pinned overview and searchable automatic screen visits with first/last sightings", flush=True)
+        native=bundle / "MacOS/daybook-native"
+        notes=root/"notes.png"
+        studio=root/"studio.png"
+        subprocess.run([native,"--make-ocr-fixture","1280","800","2",notes],check=True)
+        subprocess.run(["/usr/bin/swift",Path(__file__).with_name("passive_screen_fixture.swift"),studio],check=True,timeout=90)
+        def recognize(path):
+            v=json.loads(subprocess.check_output([native,"--self-test-screen-frame",path],timeout=50))
+            assert v["pixels"]==[1280,800] and v["jpeg"] and v["line_boxes"] and v["words"]
+            return v
+        note_frame, studio_frame=recognize(notes),recognize(studio)
+        assert "Field Notes" in studio_frame["text"] and "Forest green thread" in studio_frame["text"]
+        call("/command",{"command":"start"})
+        for i in range(1,53):
+            v=dict({1:note_frame,51:studio_frame}.get(i,{"type":"screen_unchanged"}))
+            v["sample"]={"session":"fixture","target":"fixture","sequence":i,"at":first+32+(i-51)*5}
+            call("/synthetic_screen",v)
+        captures=call("/screen_captures",{"query":"forest green thread"})["items"]
+        assert [item["at"] for item in captures] == [first+37,first+32]
+        call("/command",{"command":"stop"})
+        spatial = call("/screen_capture", {"id":captures[0]["id"]})
+        assert spatial["image_available"] and spatial["layout"]["pixels"]==[1280,800]
+        assert len(spatial["layout"]["lines"])==len(studio_frame["text"].splitlines())
+        assert call("/passive_image/"+str(spatial["id"]))==base64.b64decode(studio_frame["jpeg"])
+        passive=call("/transcript_window",{"range":{"from":first+32,"until":first+38},"passive":True})
+        groups=[p for p in passive["passages"] if p["source"]=="passive_screen"]
+        assert len(groups)==1 and "Forest green thread" in groups[0]["text"]
+        assert groups[0]["capture_image"] == captures[1]["id"]
+        assert call("/screen_capture",{"observation":groups[0]["id"]})["id"]==captures[1]["id"]
+        assert not call("/screen_capture",{"id":2})["image_available"]
+        try:
+            call("/passive_image/2")
+            raise AssertionError("An expired screenshot was still accessible")
+        except HTTPError as e:
+            assert e.code==410
+        assert call("/passive_image/3")==base64.b64decode(note_frame["jpeg"])
+        assert call("/image/"+str(image_id))==png
+        earlier = call("/screen_captures", {"query":"title clearance"})["items"]
+        archived = call("/screen_capture", {"id":earlier[0]["id"]})
+        assert archived["legacy"] and len(archived["layout"]["lines"])==2
+        print("PASS native JPEG and Vision geometry through recorder ingestion, latest-50 expiry, grouped provenance and intact manual saves", flush=True)
         if args.snapshot_dir:
             args.snapshot_dir.mkdir(parents=True, exist_ok=True)
             for name, flags in [("daybook-native-parallel.png",[]),("daybook-native-ten-minutes.png",["--ten-minutes"]),("daybook-native-screen-text.png",["--screen-history"])]:

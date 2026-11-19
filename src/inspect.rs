@@ -176,6 +176,11 @@ pub fn transcript(s: &Store, v: &Value) -> Result<Value> {
     let cmp = if newer { ">" } else { "<" };
     let order = if newer { "ASC" } else { "DESC" };
     let passive = v["passive_screen"] == true;
+    let entries = if passive {
+        "reading_entries"
+    } else {
+        "journal_entries"
+    };
     let scope = if passive {
         "((at>=?1 AND at<?2 AND ((kind IN ('preview','transcript') AND source='me') OR (kind='screen' AND source IN ('passive_screen','screen','vision') AND trim(text)<>''))) OR (kind='screen' AND source='passive_screen' AND at<?1 AND end_at>at AND end_at>=?1))"
     } else {
@@ -188,17 +193,18 @@ pub fn transcript(s: &Store, v: &Value) -> Result<Value> {
     } else {
         scope.to_owned()
     };
-    let mut q = s.db.prepare(&format!("SELECT id,at,end_at,kind,source,substr(text,1,4000),length(text)>4000,CASE WHEN kind='screen' AND source IN ('screenshot','clipboard') THEN (SELECT observation_id FROM saved_images WHERE observation_id=journal_entries.id) END FROM journal_entries WHERE {scope} AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)) ORDER BY at {order},id {order} LIMIT 80"))?;
+    let mut q = s.db.prepare(&format!("SELECT id,at,end_at,kind,source,substr(text,1,4000),length(text)>4000,CASE WHEN kind='screen' AND source IN ('screenshot','clipboard') THEN (SELECT observation_id FROM saved_images WHERE observation_id={entries}.id) END,json_extract(details,'$.capture_group') FROM {entries} WHERE {scope} AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)) ORDER BY at {order},id {order} LIMIT 80"))?;
     let mut rows=q.query_map(params![start,end,at,id],|r|{
         let mut row=json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"truncated":r.get::<_,bool>(6)?});
         if let Some(id)=r.get::<_,Option<i64>>(7)? { row["image_id"]=json!(id); }
+        if r.get::<_,Option<bool>>(8)? == Some(true) { row["capture_group"]=json!(true); }
         Ok(row)
     })?.collect::<std::result::Result<Vec<_>,_>>()?;
     if !newer {
         rows.reverse();
     }
     let total: i64 = s.db.query_row(
-        &format!("SELECT count(*) FROM journal_entries WHERE {scope}"),
+        &format!("SELECT count(*) FROM {entries} WHERE {scope}"),
         params![start, end],
         |r| r.get(0),
     )?;
@@ -208,7 +214,7 @@ pub fn transcript(s: &Store, v: &Value) -> Result<Value> {
         for (row, cmp, cursor) in [(first, "<", &mut older), (last, ">", &mut later)] {
             let a = row["at"].as_i64().unwrap();
             let i = row["id"].as_i64().unwrap();
-            let more:bool=s.db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM journal_entries WHERE {scope} AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)))"),params![start,end,a,i],|r|r.get(0))?;
+            let more:bool=s.db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {entries} WHERE {scope} AND (at{cmp}?3 OR (at=?3 AND id{cmp}?4)))"),params![start,end,a,i],|r|r.get(0))?;
             if more {
                 *cursor = if cmp == "<" {
                     json!({"before_at":a,"before_id":i})
@@ -292,9 +298,9 @@ impl<'a> ArchiveQuery<'a> {
 
 // Timestamped passages can straddle the start of a selected range. Ordinary day browsing
 // keeps the existing source-date convention and its indexed range scan.
-const DAY_ENTRIES: &str = "journal_entries WHERE at>=?1 AND at<?2";
-pub(crate) const RANGE_ENTRIES: &str = "(SELECT * FROM journal_entries WHERE at>=?1 AND at<?2
-    UNION ALL SELECT * FROM journal_entries WHERE at<?1 AND end_at>=?1 AND end_at>at AND (end_at>?1 OR source='passive_screen')) WHERE 1";
+const DAY_ENTRIES: &str = "reading_entries WHERE at>=?1 AND at<?2";
+pub(crate) const RANGE_ENTRIES: &str = "(SELECT * FROM reading_entries WHERE at>=?1 AND at<?2
+    UNION ALL SELECT * FROM reading_entries WHERE at<?1 AND end_at>=?1 AND end_at>at AND (end_at>?1 OR source='passive_screen')) WHERE 1";
 const MATCH_ENTRY: &str =
     "((?3='all' AND kind IN ('transcript','preview','note','screen')) OR kind=?3)
     AND (?4='all' OR source=?4 OR (?4='screen' AND source='passive_screen')) AND (?5='' OR instr(lower(text),lower(?5))>0)";
@@ -514,6 +520,10 @@ pub fn inspect(s: &Store, v: &Value) -> Result<Value> {
         "source" => source(s, id),
         "observation" => {
             let mut item=s.db.query_row("SELECT id,at,end_at,kind,source,text,details,source_id FROM observations WHERE id=?1",[id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"at":r.get::<_,i64>(1)?,"end":r.get::<_,i64>(2)?,"kind":r.get::<_,String>(3)?,"source":r.get::<_,String>(4)?,"text":r.get::<_,String>(5)?,"details":serde_json::from_str::<Value>(&r.get::<_,String>(6)?).unwrap_or(Value::Null),"source_id":r.get::<_,Option<i64>>(7)?})))?;
+            if item["kind"] == "screen_layout" {
+                item["kind"] = json!("screen");
+                item["source"] = json!("passive_screen");
+            }
             let mut ids = vec![];
             if let Some(i) = item["source_id"].as_i64() {
                 ids.push(i);

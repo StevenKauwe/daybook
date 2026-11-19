@@ -28,6 +28,7 @@ impl Controls {
             .store(page >= 1, std::sync::atomic::Ordering::Relaxed);
         if page == 5 {
             self.screen_history.checked = None;
+            self.screen_history.captures.checked = None;
         }
         if matches!(page, 3 | 4) {
             self.send("/overview", None);

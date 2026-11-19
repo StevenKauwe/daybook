@@ -22,7 +22,9 @@ fn passage_fields(limit: u16) -> String {
         "id,at,end_at,kind,source,substr(text,1,{limit}),length(text)>{limit},
         CASE WHEN kind='screen' AND source IN ('screenshot','clipboard')
              THEN (SELECT observation_id FROM saved_images WHERE observation_id=visible.id)
-             WHEN kind='note' THEN json_extract(details,'$.image_ids[0]') END"
+             WHEN kind='note' THEN json_extract(details,'$.image_ids[0]') END,
+        CASE WHEN source='passive_screen' AND json_extract(details,'$.capture_group') THEN
+            (SELECT capture_id FROM passive_previews WHERE layout_id=visible.id) END"
     )
 }
 const ORDER: &str = " ORDER BY at,id";
@@ -56,6 +58,7 @@ fn passage(row: &Row<'_>) -> rusqlite::Result<Passage> {
         text: row.get(5)?,
         truncated: row.get(6)?,
         image_id: row.get(7)?,
+        capture_image: row.get(8)?,
     })
 }
 fn lane_key(lane: Lane) -> &'static str {
@@ -75,7 +78,7 @@ fn bins(s: &Store, r: Span, mid: &str, n: i64, overview: bool) -> Result<Vec<Clu
             FROM visible GROUP BY lane,slot
         )
         SELECT entry.kind,entry.source,slot,n,lo,hi,substr(entry.text,1,130)
-        FROM grouped JOIN observations entry ON entry.id=grouped.example ORDER BY slot,grouped.lane";
+        FROM grouped JOIN reading_entries entry ON entry.id=grouped.example ORDER BY slot,grouped.lane";
     let mut q = s.db.prepare_cached(&sql)?;
     Ok(q.query_map(params![r.from, r.until, mid, step], |row| {
         let from = r.from + row.get::<_, i64>(2)? * step;
@@ -138,7 +141,7 @@ pub fn window(s: &Store, v: &Value) -> Result<Value> {
     let mid = middle(v);
     let edge = |order: &str| -> Result<Option<(i64, i64)>> {
         let sql = format!(
-            "SELECT at,end_at FROM journal_entries WHERE ({TRACKS}) AND ({LANES}) IN ('mic','saves',?1)
+            "SELECT at,end_at FROM reading_entries WHERE ({TRACKS}) AND ({LANES}) IN ('mic','saves',?1)
              ORDER BY at {order},id {order} LIMIT 1"
         );
         Ok(s.db
@@ -148,7 +151,7 @@ pub fn window(s: &Store, v: &Value) -> Result<Value> {
     let first = edge("ASC")?.map(|r| r.0).unwrap_or(now);
     let last = edge("DESC")?.map(|r| r.1.max(r.0)).unwrap_or(now);
     let span_sql = format!(
-        "SELECT end_at FROM journal_entries WHERE end_at>at AND end_at>?1 AND ({TRACKS})
+        "SELECT end_at FROM reading_entries WHERE end_at>at AND end_at>?1 AND ({TRACKS})
          AND ({LANES}) IN ('mic','saves',?2) ORDER BY end_at DESC LIMIT 1"
     );
     let latest_span: Option<i64> =
@@ -270,7 +273,7 @@ pub fn copy(s: &Store, v: &Value) -> Result<Value> {
             .unwrap_or_default()
     };
     let sql = scope()
-        + "SELECT id,at,end_at,kind,source,text,0,NULL FROM visible WHERE (?4 IS NULL OR lane=?4)"
+        + "SELECT id,at,end_at,kind,source,text,0,NULL,NULL FROM visible WHERE (?4 IS NULL OR lane=?4)"
         + ORDER;
     let mut q = s.db.prepare_cached(&sql)?;
     let mut text = String::new();

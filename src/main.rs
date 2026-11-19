@@ -9,6 +9,8 @@ mod reading;
 mod realtime;
 mod recovery;
 mod saved;
+mod screen_captures;
+mod screen_layout;
 mod screen_sample;
 mod speech_file;
 mod store;
@@ -92,11 +94,15 @@ fn bridge(
     std::thread::spawn(move || {
         for line in BufReader::new(output).lines() {
             let Ok(line) = line else { break };
-            if line.len() > 256 * 1024 {
-                let _=tx.send(json!({"type":"error","message":"Native event exceeded 256 KiB; source ingestion rejected","bridge_pid":pid}));
+            if line.len() > 3 * 1024 * 1024 {
+                let _=tx.send(json!({"type":"error","message":"Native event exceeded 3 MiB; source ingestion rejected","bridge_pid":pid}));
                 continue;
             }
             if let Ok(mut v) = serde_json::from_str::<Value>(&line) {
+                if line.len() > 256 * 1024 && v["type"] != "screen" {
+                    let _=tx.send(json!({"type":"error","message":"Native event exceeded its size limit","bridge_pid":pid}));
+                    continue;
+                }
                 meters.lock().unwrap().update(&v);
                 if v["type"] == "meters" || v["type"] == "meter_health" {
                     continue;
@@ -543,7 +549,11 @@ fn run() -> Result<()> {
         let endpoint = &path[prefix.len()..];
         if request.method() == &tiny_http::Method::Get {
             if let Some(id) = endpoint.strip_prefix("/image/") {
-                images.send(id, request);
+                images.send(archive_image::Source::Journal, id, request);
+                continue;
+            }
+            if let Some(id) = endpoint.strip_prefix("/passive_image/") {
+                images.send(archive_image::Source::Passive, id, request);
                 continue;
             }
         }
@@ -614,12 +624,17 @@ fn run() -> Result<()> {
             }) {
                 return Err("JSON Content-Type required".into());
             }
+            let limit = if synthetic && endpoint == "/synthetic_screen" {
+                3 * 1024 * 1024
+            } else {
+                128 * 1024
+            };
             let mut body = zeroize::Zeroizing::new(Vec::new());
             request
                 .as_reader()
-                .take(128 * 1024 + 1)
+                .take(limit as u64 + 1)
                 .read_to_end(&mut body)?;
-            if body.len() > 128 * 1024 {
+            if body.len() > limit {
                 return Err("request too large".into());
             }
             let mut v: Value = serde_json::from_slice(&body)?;
@@ -642,6 +657,8 @@ fn run() -> Result<()> {
                     return Ok(update::status(&root, synthetic).to_string());
                 }
                 "/timeline" => return Ok(inspect::timeline(&s, &v)?.to_string()),
+                "/screen_captures" => return Ok(screen_captures::page(&s, &v)?.to_string()),
+                "/screen_capture" => return Ok(screen_captures::detail(&s, &v)?.to_string()),
                 "/screen_text" => return Ok(passive::history(&s, &v)?.to_string()),
                 "/transcript_window" => return Ok(parallel::window(&s, &v)?.to_string()),
                 "/transcript_passages" => return Ok(parallel::passages(&s, &v)?.to_string()),
@@ -866,6 +883,16 @@ fn run() -> Result<()> {
                     let mut event = v.clone();
                     event["type"] = json!("meters");
                     meters.lock().unwrap().update(&event);
+                }
+                "/synthetic_screen" if synthetic => {
+                    if s.get("active") != "true"
+                        || !matches!(v["type"].as_str(), Some("screen" | "screen_unchanged"))
+                    {
+                        return Err(
+                            "An active synthetic recorder and a screen event are required".into(),
+                        );
+                    }
+                    ingest(&s, &c, &v, &inbox)?;
                 }
                 "/synthetic_audio" if synthetic => {
                     if s.get("active") != "true" {

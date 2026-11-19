@@ -74,7 +74,7 @@ fn columns_fixture(c: &mut Controls, passive: bool, empty: bool) {
         .into_iter().enumerate().filter_map(|(i,(a,b,k,s,t))|{
           let lane=Lane::of(k,s)?;
           if lane==Lane::System && passive || lane==Lane::Passive && !passive{return None}
-          Some(Passage{id:50+i as i64,at:from+a,end:from+b,kind:k.into(),source:s.into(),text:t.into(),image_id:(s=="screenshot").then_some(51),truncated:false})
+          Some(Passage{id:50+i as i64,at:from+a,end:from+b,kind:k.into(),source:s.into(),text:t.into(),capture_image:None,image_id:(s=="screenshot").then_some(51),truncated:false})
         }).collect::<Vec<_>>()
     };
     let mut nearby = passages.clone();
@@ -158,6 +158,7 @@ fn columns_fixture(c: &mut Controls, passive: bool, empty: bool) {
                 kind: k.into(),
                 source: src.into(),
                 text: text.into(),
+                capture_image: None,
                 image_id: (src == "screenshot").then_some(200 + i as i64),
                 truncated: false,
             });

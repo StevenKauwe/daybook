@@ -1,4 +1,6 @@
 use crate::{
+    screen_captures,
+    screen_layout::Layout,
     screen_sample::ScreenSample,
     store::{Result, Store},
 };
@@ -10,6 +12,8 @@ use std::collections::HashMap;
 pub struct Tracker {
     last: Option<ScreenSample>,
     visible: HashMap<String, i64>,
+    layout: Option<(i64, Layout)>,
+    image: Option<i64>,
 }
 
 pub fn observe(s: &Store, v: &Value, interval: u64) -> Result<()> {
@@ -32,24 +36,91 @@ pub fn observe(s: &Store, v: &Value, interval: u64) -> Result<()> {
     }
     let tx = s.db.unchecked_transaction()?;
     let mut next = HashMap::new();
-    if !unchanged {
-        let text = v["text"].as_str().ok_or("Missing passive OCR text")?;
-        let mut boxes: HashMap<usize, Vec<&Value>> = HashMap::new();
-        for word in v["words"].as_array().into_iter().flatten().take(1000) {
-            if let Some(line) = word["line"].as_u64() {
-                boxes.entry(line as usize).or_default().push(word);
-            }
+    let layout = if unchanged {
+        None
+    } else {
+        Some(screen_captures::read_layout(v)?)
+    };
+    let reused = tracker.layout.as_ref().filter(|(_, previous)| {
+        continuous && layout.as_ref().is_none_or(|current| current == previous)
+    });
+    let layout_id = if let Some((id, _)) = reused {
+        tx.execute(
+            "UPDATE observations SET end_at=?1 WHERE id=?2 AND end_at<?1",
+            params![sample.at, id],
+        )?;
+        *id
+    } else {
+        let current = layout.as_ref().ok_or("Missing previous screen layout")?;
+        let id = s.observation(
+            sample.at,
+            sample.at,
+            "screen_layout",
+            "capture",
+            &current.text(),
+            &json!({"capture_group":true}),
+            None,
+        )?;
+        tx.execute(
+            "INSERT INTO passive_layouts(observation_id,geometry) VALUES(?1,?2)",
+            params![id, serde_json::to_string(current)?],
+        )?;
+        id
+    };
+    tx.execute(
+        "INSERT INTO passive_captures(at,layout_id) VALUES(?1,?2)",
+        params![sample.at, layout_id],
+    )?;
+    let capture_id = tx.last_insert_rowid();
+    let image = if unchanged {
+        tracker.image
+    } else if let Some(encoded) = v["jpeg"].as_str() {
+        use base64::Engine;
+        if encoded.len() > 2_796_204 {
+            return Err("Screen image exceeds 2 MiB".into());
         }
-        for (line, original) in text.lines().take(200).enumerate() {
-            let key = original.split_whitespace().collect::<Vec<_>>().join(" ");
-            if key.is_empty() || next.contains_key(&key) {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded)?;
+        if bytes.len() > 2 * 1024 * 1024
+            || !bytes.starts_with(&[0xff, 0xd8, 0xff])
+            || !bytes.ends_with(&[0xff, 0xd9])
+        {
+            return Err("Invalid passive screenshot".into());
+        }
+        tx.execute("INSERT INTO passive_images(jpeg) VALUES(?1)", [bytes])?;
+        Some(tx.last_insert_rowid())
+    } else {
+        None
+    };
+    if let Some(id) = image {
+        tx.execute(
+            "INSERT INTO passive_capture_images(capture_id,image_id) VALUES(?1,?2)",
+            [capture_id, id],
+        )?;
+    }
+    // Count checks, including unchanged ones. Only unreferenced pixels expire.
+    tx.execute("DELETE FROM passive_capture_images WHERE capture_id<=(SELECT id FROM passive_captures ORDER BY id DESC LIMIT 1 OFFSET 50)",[])?;
+    tx.execute(
+        "DELETE FROM passive_images WHERE id NOT IN (SELECT image_id FROM passive_capture_images)",
+        [],
+    )?;
+    if let Some(current) = &layout {
+        for line in &current.lines {
+            let key = line.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if next.contains_key(&key) {
                 continue;
             }
             let previous = tracker.visible.get(&key).copied().filter(|_| continuous);
             let id = match previous {
                 Some(id) => id,
-                None => s.observation(sample.at, sample.at, "screen", "passive_screen", original.trim(),
-                    &json!({"words":boxes.remove(&line).unwrap_or_default(),"coordinates":"normalized bottom-left; word boxes at first sighting"}), None)?,
+                None => s.observation(
+                    sample.at,
+                    sample.at,
+                    "screen",
+                    "passive_screen",
+                    &line.text,
+                    &json!({"capture_layout":layout_id}),
+                    None,
+                )?,
             };
             next.insert(key, id);
         }
@@ -61,9 +132,11 @@ pub fn observe(s: &Store, v: &Value, interval: u64) -> Result<()> {
             params![sample.at,serde_json::to_string(&ids)?])?;
     }
     tx.commit()?;
-    if !unchanged {
+    if let Some(current) = layout {
+        tracker.layout = Some((layout_id, current));
         tracker.visible = next;
     }
+    tracker.image = image;
     tracker.last = Some(sample);
     Ok(())
 }
@@ -210,7 +283,7 @@ mod tests {
             )
             .unwrap();
         let details: Value = serde_json::from_str(&details).unwrap();
-        assert_eq!(details["words"], json!([{"line":1,"text":"$120","x":0.8}]));
+        assert!(details["capture_layout"].as_i64().is_some());
         assert!(details.get("path").is_none() && details.get("vision_pending").is_none());
         assert_eq!(
             s.db.query_row("SELECT count(*) FROM saved_images", [], |r| r

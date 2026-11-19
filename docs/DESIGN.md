@@ -2,6 +2,8 @@
 
 The live workspace opens on a time-aligned journal. The **Inputs** menu opens the audio monitors. Switch between system audio and passive screen text alongside the microphone. Manual screenshots and clipboard entries are visible with either choice. Recorder state and the Start or Stop control stay visible while switching pages or reading back. Paper uses a warm background, dark ink and a spruce navigation rail. Night uses a deep green reading surface with rose microphone, lilac system and green saved-item accents. Both retain explicit labels for each input and state.
 
+Each automatic screen check appears under **Screen text → Captures**. The latest 50 checks include a local screenshot with a switchable text overlay. **Text layout** uses the sampled display’s proportions and local Vision coordinates. **Reading order** presents the same capture as selectable text. Consecutive checks with identical text in the same positions share a passage in the transcript. The screen icon on that passage opens the earliest check in that passage with an available screenshot, or its first check. **Line history** follows a line across changes in the surrounding screen. Earlier recordings only retained first sightings and some word positions.
+
 | Surface | Behavior |
 | --- | --- |
 | Input monitors | The trace contains the most recent 3.2 seconds of measured RMS and peak values. The narrow meter at the right reacts to the latest reading. Missing or expired readings clear the display. |

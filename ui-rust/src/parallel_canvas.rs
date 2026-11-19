@@ -210,7 +210,7 @@ impl Controls {
         ui.painter()
             .with_clip_rect(r.intersect(ui.clip_rect()))
             .galley(pos, galley.clone(), colors.ink);
-        let body_right = if p.lane() == Lane::Saves {
+        let body_right = if matches!(p.lane(), Lane::Saves | Lane::Passive) {
             r.right() - 22.
         } else {
             r.right()
@@ -257,7 +257,7 @@ impl Controls {
                 ui.close();
             }
         });
-        if p.lane() == Lane::Saves {
+        if matches!(p.lane(), Lane::Saves | Lane::Passive) {
             let end = galley.pos_from_cursor(galley.end()).min;
             let left = (pos.x + end.x + 4.).clamp(r.left(), (r.right() - 20.).max(r.left()));
             let top = (pos.y + end.y).clamp(r.top(), (r.bottom() - 16.).max(r.top()));
@@ -281,7 +281,9 @@ impl Controls {
         ui.painter()
             .rect_stroke(rect, 4., Stroke::new(0.8, colors.line), StrokeKind::Inside);
         let glyph = match (p.kind.as_str(), p.source.as_str()) {
-            ("screen", "screenshot") => design::Icon::System,
+            ("screen", "passive_screen" | "screen" | "vision" | "screenshot") => {
+                design::Icon::System
+            }
             ("screen", "clipboard") => design::Icon::Photo,
             ("note", "clipboard") => design::Icon::Clipboard,
             _ => design::Icon::Note,
@@ -291,8 +293,25 @@ impl Controls {
             rect.center(),
             12.,
             glyph,
-            source_color(Lane::Saves, self.reading.night),
+            source_color(p.lane(), self.reading.night),
         );
+        if p.lane() == Lane::Passive {
+            button.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Open capture layout")
+            });
+            if button.clicked() {
+                self.open_capture(p.id);
+            }
+            button.on_hover_ui(|ui| {
+                ui.label("Open capture layout");
+                if let Some(id) = p.capture_image {
+                    let (area, _) = ui.allocate_exact_size(vec2(255., 154.), Sense::hover());
+                    self.thumbnails
+                        .paint_from(ui, area, &self.base, ("passive_image", id));
+                }
+            });
+            return;
+        }
         button.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::WidgetType::Button,
@@ -544,7 +563,13 @@ impl Controls {
                 let mut small = true;
                 if let Some(index) = b.index {
                     let p = &w.passages[index];
-                    let wrap = (cell.width() - if lane == Lane::Saves { 26. } else { 7. }).max(12.);
+                    let wrap = (cell.width()
+                        - if matches!(lane, Lane::Saves | Lane::Passive) {
+                            26.
+                        } else {
+                            7.
+                        })
+                    .max(12.);
                     let ceiling = (self.reading.size as f32 * 0.77)
                         * (60. / w.range.len() as f32).sqrt().clamp(0.37, 1.1);
                     let mut size = ceiling.max(6.);
@@ -583,7 +608,7 @@ impl Controls {
                     let original = b
                         .index
                         .map(|i| &w.passages[i])
-                        .filter(|p| p.lane() == Lane::Saves);
+                        .filter(|p| matches!(p.lane(), Lane::Saves | Lane::Passive));
                     let text_end = lens.left() - if original.is_some() { 22. } else { 2. };
                     let text_rect =
                         Rect::from_min_max(cell.min, pos2(text_end.max(x + 1.), row.bottom()));

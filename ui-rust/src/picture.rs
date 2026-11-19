@@ -40,13 +40,13 @@ fn decode(bytes: &[u8], side: u32) -> Loaded {
     })
 }
 
-fn fetch(base: &str, id: i64, side: u32) -> Loaded {
+fn fetch(base: &str, route: &str, id: i64, side: u32) -> Loaded {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(30))
         .redirects(0)
         .build();
     let response = agent
-        .get(&format!("{base}/image/{id}"))
+        .get(&format!("{base}/{route}/{id}"))
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(410, _) => "This image is no longer available.".to_owned(),
@@ -65,25 +65,35 @@ fn fetch(base: &str, id: i64, side: u32) -> Loaded {
     decode(&bytes, side)
 }
 
-fn load(ctx: &egui::Context, base: &str, id: i64, side: u32) -> Receiver<Loaded> {
+fn load(
+    ctx: &egui::Context,
+    base: &str,
+    route: &'static str,
+    id: i64,
+    side: u32,
+) -> Receiver<Loaded> {
     let (tx, rx) = mpsc::channel();
     let base = base.to_owned();
     let ctx = ctx.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(fetch(&base, id, side));
+        let _ = tx.send(fetch(&base, route, id, side));
         ctx.request_repaint();
     });
     rx
 }
 
+type ThumbnailKey = (&'static str, i64);
 /// Share small previews between visible Archive rows and source lists.
 #[derive(Default)]
 pub struct Thumbnails {
-    cache: VecDeque<(i64, Option<egui::TextureHandle>)>,
-    loading: Option<(i64, Receiver<Loaded>)>,
+    cache: VecDeque<(ThumbnailKey, Option<egui::TextureHandle>)>,
+    loading: Option<(ThumbnailKey, Receiver<Loaded>)>,
 }
 impl Thumbnails {
     pub fn paint(&mut self, ui: &egui::Ui, rect: egui::Rect, base: &str, id: i64) {
+        self.paint_from(ui, rect, base, ("image", id));
+    }
+    pub fn paint_from(&mut self, ui: &egui::Ui, rect: egui::Rect, base: &str, key: ThumbnailKey) {
         if !ui.is_rect_visible(rect) {
             return;
         }
@@ -93,7 +103,7 @@ impl Thumbnails {
                 result => {
                     let texture = result.ok().and_then(Result::ok).map(|image| {
                         ui.ctx().load_texture(
-                            format!("thumbnail-{loading_id}"),
+                            format!("thumbnail-{}-{}", loading_id.0, loading_id.1),
                             image.pixels,
                             egui::TextureOptions::LINEAR,
                         )
@@ -106,7 +116,7 @@ impl Thumbnails {
                 }
             }
         }
-        if let Some(i) = self.cache.iter().position(|(key, _)| *key == id) {
+        if let Some(i) = self.cache.iter().position(|(cached, _)| *cached == key) {
             let entry = self.cache.remove(i).unwrap();
             if let Some(tex) = &entry.1 {
                 let size = tex.size_vec2();
@@ -131,7 +141,7 @@ impl Thumbnails {
             ui.painter()
                 .rect_filled(rect, 3., super::design::LINE.gamma_multiply(0.5));
             if self.loading.is_none() {
-                self.loading = Some((id, load(ui.ctx(), base, id, 256)));
+                self.loading = Some((key, load(ui.ctx(), base, key.0, key.1, 256)));
             }
         }
     }
@@ -178,6 +188,37 @@ impl Viewer {
         }
         self.loading = None;
     }
+    pub fn ready(&self) -> bool {
+        self.texture.is_some()
+    }
+    pub fn passive_texture(
+        &mut self,
+        ui: &mut egui::Ui,
+        base: &str,
+        id: i64,
+    ) -> Option<egui::TextureId> {
+        if self.id != Some(id) {
+            self.clear();
+            self.id = Some(id);
+        }
+        self.poll(ui.ctx());
+        if let Some((texture, _)) = &self.texture {
+            return Some(texture.id());
+        }
+        if let Some(e) = &self.error {
+            ui.label(e);
+            if ui.small_button("Try loading again").clicked() {
+                self.error = None;
+            }
+        } else {
+            ui.spinner();
+            if self.loading.is_none() {
+                let side = ui.ctx().input(|i| i.max_texture_side).clamp(1, 4096) as u32;
+                self.loading = Some((id, load(ui.ctx(), base, "passive_image", id, side)));
+            }
+        }
+        None
+    }
     pub fn show(&mut self, ui: &mut egui::Ui, base: &str, id: i64) {
         if self.id != Some(id) {
             self.clear();
@@ -219,7 +260,7 @@ impl Viewer {
             ui.label("Loading image…");
             if self.loading.is_none() {
                 let side = ui.ctx().input(|i| i.max_texture_side).clamp(1, 4096) as u32;
-                self.loading = Some((id, load(ui.ctx(), base, id, side)));
+                self.loading = Some((id, load(ui.ctx(), base, "image", id, side)));
             }
         }
     }

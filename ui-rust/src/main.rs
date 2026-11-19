@@ -32,7 +32,10 @@ mod preview;
 #[path = "../../src/reading.rs"]
 mod reading;
 mod scope;
+mod screen_captures;
 mod screen_history;
+#[path = "../../src/screen_layout.rs"]
+mod screen_layout;
 mod time_ruler;
 #[path = "../../src/transcript_range.rs"]
 mod transcript_range;
@@ -713,6 +716,10 @@ impl Controls {
             }
             if r.path == "/note" {
                 self.saving_note = false;
+            }
+            if matches!(r.path.as_str(), "/screen_captures" | "/screen_capture") {
+                self.screen_history.captures.reply(r);
+                continue;
             }
             if r.path == "/screen_text" {
                 self.screen_history.reply(r);
@@ -1643,7 +1650,7 @@ impl Controls {
                     });
                     muted(
                         ui,
-                        "While recording, Daybook reads text on this Mac and discards each frame. Repeated lines keep their first and last observed times. Save Screenshot keeps an original.",
+                        "Daybook keeps the latest 50 passive screenshots on this Mac. Each check keeps its text and screen positions. Manually saved screenshots stay in your journal.",
                     );
                     if ui.link("View captured screen text").clicked() {
                         self.navigate(5);
@@ -2017,6 +2024,18 @@ impl Controls {
             )
         {
             muted(ui, "The original image is unavailable.");
+        }
+        if observation
+            && v["kind"] == "screen"
+            && matches!(
+                v["source"].as_str(),
+                Some("passive_screen" | "screen" | "vision")
+            )
+            && let Some(id) = v["id"].as_i64()
+            && ui.button("Open capture layout").clicked()
+        {
+            self.open_capture(id);
+            return;
         }
         if v["source"] == "passive_screen" && v["end"].as_i64() > v["at"].as_i64() {
             muted(ui, format!("Last seen {}", full_timestamp(&v["end"])));

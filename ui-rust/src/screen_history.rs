@@ -18,6 +18,8 @@ struct Page {
 }
 #[derive(Default)]
 pub(super) struct History {
+    pub captures: crate::screen_captures::Browser,
+    pub visits: bool,
     query: String,
     cursors: Vec<[i64; 2]>,
     page: Page,
@@ -29,7 +31,11 @@ pub(super) struct History {
 }
 impl History {
     pub fn ready(&self) -> bool {
-        self.loaded.is_some() && self.error.is_none()
+        if self.visits {
+            self.loaded.is_some() && self.error.is_none()
+        } else {
+            self.captures.ready()
+        }
     }
     fn request(&self) -> Value {
         json!({"query":self.query.trim(),"before":self.cursors.last()})
@@ -54,6 +60,14 @@ impl History {
 }
 impl Controls {
     pub(super) fn screen_text_page(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.screen_history.visits, false, "Captures");
+            ui.selectable_value(&mut self.screen_history.visits, true, "Line history");
+        });
+        if !self.screen_history.visits {
+            self.capture_browser(ui);
+            return;
+        }
         let h = &mut self.screen_history;
         ui.horizontal_wrapped(|ui| {
             let search = ui.add(

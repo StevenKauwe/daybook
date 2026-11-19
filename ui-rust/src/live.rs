@@ -57,7 +57,12 @@ fn paragraphs(rows: &[Value]) -> Vec<Paragraph> {
                 .trim_end()
                 .ends_with(['.', '!', '?']);
             let related = match source {
-                "passive_screen" => last["at"] == row["at"] && last["end"] == row["end"],
+                "passive_screen" => {
+                    last["capture_group"] != true
+                        && row["capture_group"] != true
+                        && last["at"] == row["at"]
+                        && last["end"] == row["end"]
+                }
                 "me" | "remote" => (-2..=12).contains(&gap),
                 _ => false,
             };
